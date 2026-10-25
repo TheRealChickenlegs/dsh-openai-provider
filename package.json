@@ -1,0 +1,93 @@
+{
+  "name": "dsh-openai-provider",
+  "version": "0.1.0",
+  "description": "Connect multiple OpenAI-compatible providers to DeepSeek Harness: discover their models, pick the ones to expose, and generate images and videos with them from a DSH session.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "scripts",
+    "docs",
+    "tsconfig.json",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/run-tests.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "openai",
+    "openai-compatible",
+    "image-generation",
+    "video-generation",
+    "text2img",
+    "text2video",
+    "sora",
+    "gpt-image",
+    "grok-imagine"
+  ],
+  "author": "dsh-openai-provider contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheRealChickenlegs/dsh-openai-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TheRealChickenlegs/dsh-openai-provider/issues"
+  },
+  "homepage": "https://github.com/TheRealChickenlegs/dsh-openai-provider#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "meta": {
+    "title": "OpenAI Providers",
+    "description": "Connect multiple OpenAI-compatible endpoints, choose the image and video models to expose, and let DSH generate media through them. API keys stay in the DSH credentials store."
+  },
+  "icon": "./icon.svg",
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.0-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  }
+}

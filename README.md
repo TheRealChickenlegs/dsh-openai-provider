@@ -177,7 +177,7 @@ The full threat model and guarantees are in [docs/SECURITY.md](docs/SECURITY.md)
 npm install
 npm run build       # tsc + copies the browser bundle
 npm run typecheck
-npm test            # 80 tests: config, HTTP, images, videos, route, tools, client render, security
+npm test            # 83 tests: config, HTTP, images, videos, route, tools, settings DOM, security
 ```
 
 `lib/` is build output but is **committed on purpose**, so the package can be installed from Git without a

@@ -112,6 +112,7 @@ test('the client bundle exports the expected module face', () => {
   assert.ok(exports.inject.includes('slots'))
   assert.ok(exports.inject.includes('configForms'))
   assert.ok(exports.inject.includes('remote'))
+  assert.ok(exports.inject.includes('remote.credentials'))
 })
 
 test('the settings page renders providers, models, and the security note', () => {

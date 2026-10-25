@@ -181,6 +181,36 @@ window.__ModuleLoader__.load({
       return CREDENTIAL_PREFIX + segment + '_API_KEY'
     }
 
+    function errorText(cause) {
+      return String(cause && cause.message ? cause.message : cause)
+    }
+
+    /**
+     * Read the credentials remote namespace defensively. Cordis throws when a
+     * service property is read without the matching `inject` entry, so a plain
+     * `ctx.remote.credentials` access inside a component effect can crash the
+     * whole slot page. The client plugin declares `remote.credentials` in
+     * `exports.inject`, and this helper keeps the page alive even if a future
+     * composition mounts the page without that namespace.
+     */
+    function credentialsOf(ctx) {
+      try {
+        if (!ctx || !ctx.remote) return undefined
+        return ctx.remote.credentials || undefined
+      } catch (_) {
+        return undefined
+      }
+    }
+
+    /** Invoke a possibly-missing/throwing async op without ever throwing to the caller. */
+    function settledCall(call) {
+      try {
+        return Promise.resolve(call())
+      } catch (cause) {
+        return Promise.resolve({ ok: false, error: errorText(cause) })
+      }
+    }
+
     function asArray(value) {
       return Array.isArray(value) ? value : []
     }
@@ -296,6 +326,93 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /** Page-level guard: a component error must never abdicate the config slot. */
+    class PageBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+      static getDerivedStateFromError(error) {
+        return { error: error }
+      }
+      componentDidCatch(error) {
+        try { console.error('[openai-provider] page error:', error) } catch (_) {}
+      }
+      render() {
+        if (this.state.error) {
+          return h(
+            'div',
+            { className: 'op-root' },
+            h('h2', { className: 'op-pageTitle' }, 'OpenAI Providers'),
+            h('p', { className: 'op-msg op-err' }, 'This settings page hit an error: ' + errorText(this.state.error)),
+            h(
+              'div',
+              { className: 'op-actions' },
+              h(
+                'button',
+                {
+                  className: 'op-btn op-btnPrimary',
+                  type: 'button',
+                  onClick: function () { this.setState({ error: null }) }.bind(this)
+                },
+                'Retry'
+              )
+            ),
+            h('p', { className: 'op-hint' }, 'If Retry does not help, reload the DSH window and check the renderer console for the stack trace.')
+          )
+        }
+        return this.props.children
+      }
+    }
+
+    /** Card-level guard: one broken provider must not take down its siblings. */
+    class CardBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { error: null }
+      }
+      static getDerivedStateFromError(error) {
+        return { error: error }
+      }
+      componentDidCatch(error) {
+        try { console.error('[openai-provider] provider card error:', error) } catch (_) {}
+      }
+      render() {
+        if (this.state.error) {
+          return h(
+            'div',
+            { className: 'op-card' },
+            h('p', { className: 'op-msg op-err' }, 'This provider card hit an error: ' + errorText(this.state.error)),
+            h(
+              'div',
+              { className: 'op-actions' },
+              h(
+                'button',
+                {
+                  className: 'op-btn',
+                  type: 'button',
+                  onClick: function () { this.setState({ error: null }) }.bind(this)
+                },
+                'Retry card'
+              ),
+              typeof this.props.onRemove === 'function'
+                ? h(
+                    'button',
+                    {
+                      className: 'op-btn op-btnDanger',
+                      type: 'button',
+                      onClick: this.props.onRemove
+                    },
+                    'Remove provider'
+                  )
+                : null
+            )
+          )
+        }
+        return this.props.children
+      }
+    }
+
     function ProviderCard(props) {
       var provider = props.provider
       var index = props.index
@@ -337,13 +454,22 @@ window.__ModuleLoader__.load({
 
       function refreshKeyInfo() {
         if (!ops) { setKeyInfo(null); return }
-        ops.describeKeys([ref]).then(function (result) {
-          if (result.ok) {
-            var info = result.value && result.value[ref]
-            setKeyInfo(info || { configured: false })
-          } else {
-            setKeyInfo({ configured: false, unavailable: result.error })
+        var pending
+        try {
+          pending = ops.describeKeys([ref])
+        } catch (cause) {
+          setKeyInfo({ configured: false, unavailable: errorText(cause) })
+          return
+        }
+        Promise.resolve(pending).then(function (result) {
+          if (!result || result.ok !== true) {
+            setKeyInfo({ configured: false, unavailable: result && result.error ? result.error : 'credential status unavailable' })
+            return
           }
+          var info = result.value && result.value[ref]
+          setKeyInfo(info || { configured: false })
+        }).catch(function (cause) {
+          setKeyInfo({ configured: false, unavailable: errorText(cause) })
         })
       }
 
@@ -369,16 +495,24 @@ window.__ModuleLoader__.load({
         }
         setKeyBusy(true)
         setKeyError('')
-        ops.saveKey(ref, value).then(function (result) {
-          if (result.ok) {
+        var pending
+        try {
+          pending = ops.saveKey(ref, value)
+        } catch (cause) {
+          setKeyBusy(false)
+          setKeyError(errorText(cause))
+          return
+        }
+        Promise.resolve(pending).then(function (result) {
+          if (result && result.ok === true) {
             setKeyInput('')
             refreshKeyInfo()
             props.notify('Key saved to the DSH credentials store for reference ' + ref + '.')
           } else {
-            setKeyError(result.error || 'The credential could not be saved.')
+            setKeyError(result && result.error ? result.error : 'The credential could not be saved.')
           }
         }).catch(function (cause) {
-          setKeyError(String(cause && cause.message ? cause.message : cause))
+          setKeyError(errorText(cause))
         }).then(function () { setKeyBusy(false) })
       }
 
@@ -386,34 +520,53 @@ window.__ModuleLoader__.load({
         if (!ops) return
         setKeyBusy(true)
         setKeyError('')
-        ops.clearKey(ref).then(function (result) {
-          if (result.ok) {
+        var pending
+        try {
+          pending = ops.clearKey(ref)
+        } catch (cause) {
+          setKeyBusy(false)
+          setKeyError(errorText(cause))
+          return
+        }
+        Promise.resolve(pending).then(function (result) {
+          if (result && result.ok === true) {
             refreshKeyInfo()
             props.notify('Key removed for reference ' + ref + '.')
           } else {
-            setKeyError(result.error || 'The credential could not be removed.')
+            setKeyError(result && result.error ? result.error : 'The credential could not be removed.')
           }
         }).catch(function (cause) {
-          setKeyError(String(cause && cause.message ? cause.message : cause))
+          setKeyError(errorText(cause))
         }).then(function () { setKeyBusy(false) })
       }
 
       function loadModels() {
         setDiscovery({ loading: true, models: [], error: '' })
-        Promise.resolve(props.saveFirst()).then(function (saved) {
-          if (!saved) {
+        var saved
+        try {
+          saved = Promise.resolve(props.saveFirst())
+        } catch (cause) {
+          setDiscovery({ loading: false, models: [], error: errorText(cause) })
+          return
+        }
+        saved.then(function (ok) {
+          if (!ok) {
             setDiscovery({ loading: false, models: [], error: 'Fix the configuration and save before loading models.' })
             return
           }
-          return ops.listModels(provider.id).then(function (result) {
-            if (result.ok) {
+          if (!ops) {
+            setDiscovery({ loading: false, models: [], error: 'The plugin operations are unavailable.' })
+            return
+          }
+          return settledCall(function () { return ops.listModels(provider.id) }).then(function (result) {
+            if (result && result.ok === true) {
               setDiscovery({ loading: false, models: result.models || [], error: '', truncated: result.truncated })
             } else {
-              setDiscovery({ loading: false, models: [], error: result.error || 'Model discovery failed.' })
+              setDiscovery({ loading: false, models: [], error: result && result.error ? result.error : 'Model discovery failed.' })
             }
           })
         }).catch(function (cause) {
-          setDiscovery({ loading: false, models: [], error: String(cause && cause.message ? cause.message : cause) })
+          setDiscovery({ loading: false, models: [], error: errorText(cause) })
         })
       }
 
@@ -1028,17 +1181,20 @@ window.__ModuleLoader__.load({
       }
       var configValue = snapshot.value || {}
       var providerCards = providers.map(function (provider, index) {
-        return h(ProviderCard, {
-          key: provider.__uid || 'provider-' + index,
-          provider: provider,
-          index: index,
-          ops: ops,
-          disabled: disabled,
-          update: function (next) { updateProvider(index, next) },
-          remove: function () { removeProvider(index) },
-          saveFirst: function () { return saveAll({ quiet: true, force: true }) },
-          notify: notify
-        })
+        return h(
+          CardBoundary,
+          { key: provider.__uid || 'provider-' + index, onRemove: function () { removeProvider(index) } },
+          h(ProviderCard, {
+            provider: provider,
+            index: index,
+            ops: ops,
+            disabled: disabled,
+            update: function (next) { updateProvider(index, next) },
+            remove: function () { removeProvider(index) },
+            saveFirst: function () { return saveAll({ quiet: true, force: true }) },
+            notify: notify
+          })
+        )
       })
 
       var globalFields = GLOBALS.map(function (field) {
@@ -1164,73 +1320,80 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function SafeConfigPage(props) {
+      return h(PageBoundary, null, h(ConfigPage, props))
+    }
+
     function apply(ctx) {
       installStyles()
       var form = ctx.configForms.get(ENTRY_ID)
-      var ops = {
-        describeKeys: function (refs) {
-          var service = ctx.remote && ctx.remote.credentials
-          if (!service || typeof service.describe !== 'function') {
-            return Promise.resolve({ ok: false, error: 'The credentials service is unavailable in this DSH deployment.' })
-          }
-          return service.describe(refs).then(function (result) {
-            if (result && result.ok === false) {
-              return { ok: false, error: result.error && result.error.message ? result.error.message : 'Could not read credential status.' }
-            }
-            return { ok: true, value: (result && result.value) || {} }
-          })
-        },
-        saveKey: function (ref, value) {
-          var service = ctx.remote && ctx.remote.credentials
-          if (!service || typeof service.set !== 'function') {
-            return Promise.resolve({ ok: false, error: 'The credentials service is unavailable; export ' + ref + ' in the environment instead.' })
-          }
-          return service.set(ref, value).then(function (result) {
-            if (result && result.ok === false) {
-              return { ok: false, error: result.error && result.error.message ? result.error.message : 'The credential was refused.' }
-            }
-            return { ok: true }
-          })
-        },
-        clearKey: function (ref) {
-          var service = ctx.remote && ctx.remote.credentials
-          if (!service || typeof service.unset !== 'function') {
-            return Promise.resolve({ ok: false, error: 'The credentials service is unavailable.' })
-          }
-          return service.unset(ref).then(function (result) {
-            if (result && result.ok === false) {
-              return { ok: false, error: result.error && result.error.message ? result.error.message : 'The credential could not be removed.' }
-            }
-            return { ok: true }
-          })
-        },
-        listModels: function (providerId) {
-          return fetch(ROUTE, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-              'content-type': 'application/json',
-              [ROUTE_HEADER]: '1'
-            },
-            body: JSON.stringify({ providerId: providerId })
-          }).then(function (response) {
-            return response.text().then(function (text) {
-              var data = null
-              try { data = JSON.parse(text) } catch (_) {}
-              if (data === null) {
+      function callRemote(service, method, args) {
+        if (!service || typeof service[method] !== 'function') {
+          return Promise.resolve({ ok: false, error: 'The credentials service is unavailable in this DSH deployment.' })
+        }
+        try {
+          return Promise.resolve(service[method].apply(service, args)).then(
+            function (result) {
+              if (result && result.ok === false) {
                 return {
                   ok: false,
-                  error: response.status === 404
-                    ? 'Model discovery is not routed in this DSH deployment. Add model ids manually below.'
-                    : 'Model discovery returned an unexpected response (HTTP ' + response.status + ').'
+                  error: result.error && result.error.message ? result.error.message : 'The credentials service refused the request.'
                 }
               }
-              if (!response.ok || data.ok !== true) {
-                return { ok: false, error: data.error || 'Model discovery failed (HTTP ' + response.status + ').' }
-              }
-              return { ok: true, models: data.models || [], truncated: data.truncated === true }
+              return { ok: true, value: (result && result.value) || {} }
+            },
+            function (cause) {
+              return { ok: false, error: errorText(cause) }
+            }
+          )
+        } catch (cause) {
+          return Promise.resolve({ ok: false, error: errorText(cause) })
+        }
+      }
+
+      var ops = {
+        describeKeys: function (refs) {
+          return callRemote(credentialsOf(ctx), 'describe', [refs])
+        },
+        saveKey: function (ref, value) {
+          return callRemote(credentialsOf(ctx), 'set', [ref, value])
+        },
+        clearKey: function (ref) {
+          return callRemote(credentialsOf(ctx), 'unset', [ref])
+        },
+        listModels: function (providerId) {
+          try {
+            return fetch(ROUTE, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'content-type': 'application/json',
+                [ROUTE_HEADER]: '1'
+              },
+              body: JSON.stringify({ providerId: providerId })
+            }).then(function (response) {
+              return response.text().then(function (text) {
+                var data = null
+                try { data = JSON.parse(text) } catch (_) {}
+                if (data === null) {
+                  return {
+                    ok: false,
+                    error: response.status === 404
+                      ? 'Model discovery is not routed in this DSH deployment. Add model ids manually below.'
+                      : 'Model discovery returned an unexpected response (HTTP ' + response.status + ').'
+                  }
+                }
+                if (!response.ok || data.ok !== true) {
+                  return { ok: false, error: data.error || 'Model discovery failed (HTTP ' + response.status + ').' }
+                }
+                return { ok: true, models: data.models || [], truncated: data.truncated === true }
+              })
+            }, function (cause) {
+              return { ok: false, error: errorText(cause) }
             })
-          })
+          } catch (cause) {
+            return Promise.resolve({ ok: false, error: errorText(cause) })
+          }
         }
       }
 
@@ -1243,7 +1406,7 @@ window.__ModuleLoader__.load({
                 key: PACKAGE_ID,
                 inject: function () { return { form: form, ops: ops } }
               },
-              ConfigPage
+              SafeConfigPage
             )
           })
         })
@@ -1251,7 +1414,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
-    exports.inject = ['slots', 'configForms', 'remote']
+    exports.inject = ['slots', 'configForms', 'remote', 'remote.credentials']
     exports.name = 'openai-provider'
     return module.exports
   }

@@ -19,12 +19,14 @@ Initial release.
 - Authenticated same-origin model-discovery route, limited to configured provider ids.
 - Per-model defaults (size, quality, seconds, aspect ratio) and capability-aware provider
   auto-selection.
+- The settings page declares its credentials namespace and contains errors in page/card boundaries,
+  so adding a provider can never blank or abdicate the plugin page.
 - Secret redaction across errors, results, sidecars and logs; redirect/origin/size controls for
   media downloads.
 - Tag-driven GitHub Release and npm publishing workflows with provenance, version/tag and
   already-published guards, plus CI that verifies the committed `lib/` matches `src/`.
-- 80 tests using Node's test runner and fake OpenAI-compatible servers, including client render
-  tests and a package/plugin version consistency check.
+- 83 tests using Node's test runner and fake OpenAI-compatible servers, including client render and
+  DOM interaction tests, plus a package/plugin version consistency check.
 
 ### Notes
 

@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.4 — 2026-10-26
+
+### Added
+
+- **Type filter for discovered models**: All media / Images / Videos / All types,
+  with live counts. Vendor catalogues with hundreds of models can be narrowed
+  before selecting, and the “All types” view reveals text, embedding and other
+  catalogue entries.
+- Discovery now carries the catalogue's own `type` (image, video, text,
+  embedding, ...); the model list shows it on each row, falling back to the
+  image/video kind when no type is supplied.
+
 ## 0.1.3 — 2026-10-26
 
 ### Added

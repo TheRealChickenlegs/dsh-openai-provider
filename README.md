@@ -1,3 +1,5 @@
+[![npm](https://img.shields.io/npm/v/dsh-openai-provider.svg)](https://www.npmjs.com/package/dsh-openai-provider)
+
 # OpenAI Providers for DeepSeek Harness
 
 Connect **multiple OpenAI-compatible endpoints** to a DSH session, pick which of their image and

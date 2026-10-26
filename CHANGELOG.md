@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.1 — 2026-10-26
+
+### Fixed
+
+- **Adding a provider no longer blanks the plugin page.** The client bundle now
+  declares `remote.credentials` in its `inject` list; without it, Cordis throws on
+  the first card's credential-status effect and DSH's slot boundary abdicates the
+  whole configuration section. Credential and discovery calls are also guarded,
+  and page/card error boundaries keep a failure visible instead of removing the page.
+- Added jsdom interaction coverage for Add provider with and without a working
+  credentials namespace, plus a check that the bundle declares the namespace.
+
 ## 0.1.0 — 2026-10-26
 
 Initial release.
@@ -19,14 +31,12 @@ Initial release.
 - Authenticated same-origin model-discovery route, limited to configured provider ids.
 - Per-model defaults (size, quality, seconds, aspect ratio) and capability-aware provider
   auto-selection.
-- The settings page declares its credentials namespace and contains errors in page/card boundaries,
-  so adding a provider can never blank or abdicate the plugin page.
 - Secret redaction across errors, results, sidecars and logs; redirect/origin/size controls for
   media downloads.
 - Tag-driven GitHub Release and npm publishing workflows with provenance, version/tag and
   already-published guards, plus CI that verifies the committed `lib/` matches `src/`.
-- 83 tests using Node's test runner and fake OpenAI-compatible servers, including client render and
-  DOM interaction tests, plus a package/plugin version consistency check.
+- 80 tests using Node's test runner and fake OpenAI-compatible servers, including client render
+  tests and a package/plugin version consistency check.
 
 ### Notes
 

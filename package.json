@@ -1,6 +1,6 @@
 {
   "name": "dsh-openai-provider",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Connect multiple OpenAI-compatible providers to DeepSeek Harness: discover their models, pick the ones to expose, and generate images and videos with them from a DSH session.",
   "type": "module",
   "main": "lib/index.js",

@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.2 — 2026-10-26
+
+### Fixed
+
+- Adding or removing a model no longer blanks the provider form. The card's
+  model mutations now go through the updater-aware state path instead of
+  storing a function as the provider (which produced
+  `Provider 1: id must be lowercase letters, digits and hyphens`).
+- Discovery results survive the save that runs before **Load models**: each
+  provider card keeps a stable key across the configuration mirror round-trip.
+
+### Added
+
+- Discovered models can be **multi-selected with checkboxes** and added with
+  **Add selected (N)**. **Select all shown** covers the current filter, and all
+  added models remain editable (kind and API dialect) in the exposed list.
+
+### Tests
+
+- A jsdom flow test now covers Add provider → discover → select two →
+  Add selected → Save and asserts that every provider field survived.
+
 ## 0.1.1 — 2026-10-26
 
 ### Fixed

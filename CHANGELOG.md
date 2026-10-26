@@ -2,6 +2,38 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.3 — 2026-10-26
+
+### Added
+
+- **`videos-generations` buffered video adapter.** `POST /videos/generations` on
+  Cheaper Inference waits for the render and returns `videos[]` with a URL or
+  `b64_video`; it is not a pollable async job. The adapter submits once with the
+  video timeout, reads the media from that response, and (for base64) writes the
+  MP4 directly without a download.
+- Host-aware video dialect defaults: `cheaperinference.com` → buffered
+  `videos-generations`, `api.openai.com` + `sora` → `openai-videos`, everything
+  else → `async-videos`.
+- The model editor shows `sync /videos/generations` and pins it for Cheaper
+  Inference video models; discovery classifies video models from catalogue
+  `type`/`capabilities`/endpoint metadata, including `seedance` ids.
+- Buffered requests map `size` (for example `1280x720`) to
+  `resolution: "720p"` and `aspect_ratio: "16:9"`, and default to
+  `duration_seconds: 5` when no duration was supplied.
+
+### Fixed
+
+- Sora-named models on third-party gateways no longer default to OpenAI's
+  `/videos` shape; only `api.openai.com` uses it.
+- An async protocol saved for Cheaper Inference before this adapter existed is
+  corrected to the buffered sync dialect.
+
+### Tests
+
+- Buffered URL and base64 MP4 responses, no-polling and no-download guarantees,
+  host-aware defaults, catalogue classification, and the settings-page sync
+  option. 88 tests total.
+
 ## 0.1.2 — 2026-10-26
 
 ### Fixed

@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.5 — 2026-10-26
+
+### Fixed
+
+- **Cheaper Inference image-to-video accepts public image URLs.**
+  `input_image` may now be an `https://` URL; it is passed through as `image_url`
+  instead of being read as a local file. Local paths are rejected for this
+  provider before a request is spent, because its `/videos/generations` endpoint
+  rejects data URIs and `/v1/uploads` file ids with HTTP 503. (The upload id is
+  documented for chat content; both `image_url` and `input_references` with an
+  upload id were verified to fail.)
+- **Buffered video downloads use the returned absolute URL exactly.** Relative
+  media URLs are resolved against the provider origin, and a buffered response
+  with no `videos[].url`/`b64_video` no longer falls back to polling
+  `/videos/{id}`. That fallback made a malformed response look like a 404
+  "No such job" from the downloader.
+- Verified against the live Cheaper Inference API: a public-URL Seedance 1.5
+  image-to-video request downloaded a 1.8 MB, 5.04 s MP4 end-to-end.
+
 ## 0.1.4 — 2026-10-26
 
 ### Added

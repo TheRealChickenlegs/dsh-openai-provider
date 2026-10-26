@@ -12,7 +12,7 @@ export const PLUGIN_ID = 'dsh-openai-provider'
 export const PLUGIN_DISPLAY_NAME = 'OpenAI Providers'
 
 /** Plugin version reported in the startup line. Keep in sync with package.json `version`. */
-export const PLUGIN_VERSION = '0.1.4'
+export const PLUGIN_VERSION = '0.1.5'
 
 /** Prefix for this plugin's environment variables. */
 export const ENV_PREFIX = 'DSH_OPENAI_PROVIDER'

@@ -55,6 +55,7 @@ test('guessModelKind identifies common media models', () => {
   assert.equal(guessModelKind('sora-2'), 'video')
   assert.equal(guessModelKind('grok-imagine-video-1.5'), 'video')
   assert.equal(guessModelKind('veo-3'), 'video')
+  assert.equal(guessModelKind('seedance-2.5'), 'video')
   assert.equal(guessModelKind('gpt-4o'), undefined)
   assert.equal(guessModelKind('text-embedding-3-large'), undefined)
 })
@@ -88,7 +89,7 @@ test('a provider is normalized with safe defaults', () => {
     ]
   )
   assert.equal(provider.models[0].editMode, 'multipart')
-  assert.equal(provider.models[2].protocol, 'openai-videos')
+  assert.equal(provider.models[2].protocol, 'async-videos')
   assert.ok(problems.some((problem) => /normalized to "my-gateway"/.test(problem)))
 })
 
@@ -185,9 +186,9 @@ test('volatile wrappers are unwrapped', () => {
   assert.equal(config.providers[0].models[0].id, 'gpt-image-1')
 })
 
-test('model protocol defaults match the dialect heuristics', () => {
+test('model protocol defaults are host-aware', () => {
   const problems = []
-  const provider = normalizeProvider(
+  const thirdParty = normalizeProvider(
     {
       id: 'p',
       baseUrl: 'https://example.com/v1',
@@ -201,11 +202,44 @@ test('model protocol defaults match the dialect heuristics', () => {
     0,
     problems
   )
-  assert.ok(provider)
-  assert.equal(provider.models[0].protocol, 'openai-videos')
-  assert.equal(provider.models[1].protocol, 'async-videos')
-  assert.equal(provider.models[2].editMode, 'json')
-  assert.equal(provider.models[3].editMode, 'multipart')
+  assert.ok(thirdParty)
+  // A third-party gateway with a Sora-named model still uses the generic async
+  // /videos/generations shape; only api.openai.com speaks the /videos shape.
+  assert.equal(thirdParty.models[0].protocol, 'async-videos')
+  assert.equal(thirdParty.models[1].protocol, 'async-videos')
+  assert.equal(thirdParty.models[2].editMode, 'json')
+  assert.equal(thirdParty.models[3].editMode, 'multipart')
+
+  const openai = normalizeProvider(
+    {
+      id: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      models: [{ id: 'sora-2', kind: 'video' }]
+    },
+    0,
+    problems
+  )
+  assert.ok(openai)
+  assert.equal(openai.models[0].protocol, 'openai-videos')
+
+  const cheaperProblems = []
+  const cheaper = normalizeProvider(
+    {
+      id: 'cheaper-inference',
+      baseUrl: 'https://api.cheaperinference.com/v1',
+      models: [
+        { id: 'seedance-2.5', kind: 'video' },
+        { id: 'some-video', kind: 'video', protocol: 'async-videos' }
+      ]
+    },
+    0,
+    cheaperProblems
+  )
+  assert.ok(cheaper)
+  assert.equal(cheaper.models[0].protocol, 'videos-generations')
+  // An async protocol saved before the buffered adapter existed is corrected.
+  assert.equal(cheaper.models[1].protocol, 'videos-generations')
+  assert.match(cheaperProblems.join(' '), /buffered sync endpoint/)
 })
 
 test('the config file layer is read when the profile has no providers', async () => {

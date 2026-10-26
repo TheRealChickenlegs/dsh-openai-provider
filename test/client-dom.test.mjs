@@ -267,3 +267,39 @@ test('discovered models can be multi-selected and added without blanking the pro
     await React.act(async () => { root.unmount() })
   }
 })
+
+test('Cheaper Inference video models default to the buffered sync dialect', async () => {
+  const { dom, slot } = mountPage()
+  const { createRoot } = await import('react-dom/client')
+  const root = createRoot(dom.window.document.getElementById('root'))
+  const props = slot.definition.inject()
+  await React.act(async () => {
+    root.render(React.createElement(slot.component, props))
+  })
+  await React.act(async () => {
+    findButton(dom, 'Add provider').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    await Promise.resolve()
+  })
+  setInput(dom, dom.window.document.getElementById('op-0-id'), 'cheaper-inference')
+  setInput(dom, dom.window.document.getElementById('op-0-url'), 'https://api.cheaperinference.com/v1')
+  await React.act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  setInput(dom, dom.window.document.querySelector('input[placeholder="Add a model id manually"]'), 'seedance-2.5')
+  const kindSelect = dom.window.document.querySelector('select[aria-label="Manual model kind"]')
+  const selectSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value').set
+  selectSetter.call(kindSelect, 'video')
+  kindSelect.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+  await React.act(async () => {
+    findButton(dom, 'Add model').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    await Promise.resolve()
+  })
+  const dialect = dom.window.document.querySelector('select[aria-label="API dialect"]')
+  assert.equal(dialect.value, 'videos-generations')
+  assert.deepEqual(
+    [...dialect.options].map((option) => option.textContent),
+    ['sync /videos/generations']
+  )
+  assert.match(dom.window.document.getElementById('root').textContent, /buffered POST \/videos\/generations/)
+  await React.act(async () => { root.unmount() })
+})

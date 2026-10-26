@@ -1,21 +1,24 @@
 /**
  * Video generation adapters.
  *
- * Two dialects are supported because "OpenAI-compatible video" is not settled:
+ * Three dialects are supported because "OpenAI-compatible video" is not settled:
  *
  * - `openai-videos` — `POST /videos`, `GET /videos/{id}`, then
  *   `GET /videos/{id}/content` (the OpenAI Sora shape; the hosted API was
  *   retired, but compatible gateways still implement it).
  * - `async-videos` — `POST /videos/generations`, then `GET /videos/{id}` until
  *   a URL appears (the shape documented by xAI Imagine and several gateways).
+ * - `videos-generations` — `POST /videos/generations` that buffers the job and
+ *   returns a `videos` array (`url` or `b64_video`) in the same response. This
+ *   is Cheaper Inference's shape; a single request can take minutes.
  *
- * The dialing is asynchronous with polling; every request has its own timeout
- * and the whole job has the configured video deadline.
+ * The async dialects poll; the buffered dialect returns media immediately and
+ * uses the video deadline for its one long request.
  */
 import { ProviderPluginError, badResponse, timedOut } from '../errors.js'
 import { authHeaders, joinUrl, requestJson } from '../http.js'
 import { readInputImage, toDataUri } from '../files.js'
-import type { ModelConfig, ProviderConfig, ResolvedConfig } from '../types.js'
+import type { ModelConfig, ProviderConfig, ResolvedConfig, VideoProtocol } from '../types.js'
 import { videoProtocolFor } from '../models.js'
 
 export interface VideoArgs {
@@ -36,11 +39,16 @@ export interface VideoArgs {
 }
 
 export interface VideoStart {
-  protocol: 'openai-videos' | 'async-videos'
+  protocol: VideoProtocol
   /** Provider job id, when the provider assigns one immediately. */
   id?: string
   /** A URL returned synchronously (rare, but some gateways answer with a finished job). */
   url?: string
+  /** Base64 MP4 returned by a buffered endpoint. */
+  b64?: string
+  contentType?: string
+  /** Provider request id, when it is useful for support/feedback. */
+  requestId?: string
   request: Record<string, unknown>
   raw: unknown
 }
@@ -160,8 +168,37 @@ function errorMessageOf(json: unknown): string | undefined {
   return undefined
 }
 
+function resolutionFromSize(size: string | undefined): string | undefined {
+  if (size === undefined) return undefined
+  const match = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(size.trim())
+  if (match === null) return undefined
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined
+  // Resolution names the shorter edge: 1280x720 and 720x1280 are both 720p.
+  const shortEdge = Math.min(width, height)
+  // The buffered API documents 480p/720p/1080p-style values; omit odd sizes
+  // such as 1024x1024 rather than sending a resolution it may reject.
+  if (![360, 480, 540, 720, 1080, 1440, 2160].includes(shortEdge)) return undefined
+  return `${shortEdge}p`
+}
+
+function aspectRatioFromSize(size: string | undefined): string | undefined {
+  if (size === undefined) return undefined
+  const match = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(size.trim())
+  if (match === null) return undefined
+  let width = Number(match[1])
+  let height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return undefined
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b))
+  const divisor = gcd(width, height)
+  width /= divisor
+  height /= divisor
+  return `${width}:${height}`
+}
+
 function requestBody(
-  protocol: 'openai-videos' | 'async-videos',
+  protocol: VideoProtocol,
   model: ModelConfig,
   args: VideoArgs,
   cwd: string
@@ -179,6 +216,17 @@ function requestBody(
     if (args.seconds !== undefined) body.seconds = args.seconds
     if (args.size !== undefined) body.size = args.size
     if (dataUri !== undefined) body.input_reference = { image_url: dataUri }
+  } else if (protocol === 'videos-generations') {
+    // Cheaper Inference requires one of duration_seconds/duration; default to 5s
+    // when neither the caller nor the model supplied a duration.
+    const requested = args.seconds ?? model.seconds ?? '5'
+    const numeric = Number(requested)
+    body.duration_seconds = Number.isFinite(numeric) ? numeric : requested
+    const resolution = args.resolution ?? resolutionFromSize(args.size)
+    if (resolution !== undefined) body.resolution = resolution
+    const aspectRatio = args.aspect_ratio ?? aspectRatioFromSize(args.size)
+    if (aspectRatio !== undefined) body.aspect_ratio = aspectRatio
+    if (dataUri !== undefined) body.image_url = dataUri
   } else {
     if (args.seconds !== undefined) {
       const numeric = Number(args.seconds)
@@ -191,6 +239,117 @@ function requestBody(
   }
   if (args.seed !== undefined) body.seed = args.seed
   return body
+}
+
+interface VideoPayload {
+  url?: string
+  b64?: string
+  contentType?: string
+  durationSeconds?: number
+}
+
+function dataUriPayload(value: string): { b64: string; contentType?: string } | undefined {
+  const match = /^data:([^;,]+);base64,([\s\S]+)$/i.exec(value)
+  if (match === null) return undefined
+  return { b64: match[2].replace(/\s+/g, ''), contentType: match[1] }
+}
+
+function base64Payload(value: string, minimumLength = 64): string | undefined {
+  const compact = value.replace(/\s+/g, '')
+  if (compact.length < minimumLength) return undefined
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return undefined
+  return compact
+}
+
+function videoPayloadFromItem(value: unknown): VideoPayload | undefined {
+  if (typeof value === 'string') {
+    if (/^https?:\/\//i.test(value)) return { url: value }
+    const dataUri = dataUriPayload(value)
+    if (dataUri !== undefined) return { b64: dataUri.b64, ...(dataUri.contentType !== undefined ? { contentType: dataUri.contentType } : {}) }
+    const raw = base64Payload(value)
+    return raw !== undefined ? { b64: raw } : undefined
+  }
+  const record = recordOf(value)
+  if (record === undefined) return undefined
+  for (const key of ['url', 'video_url', 'download_url', 'file_url']) {
+    const candidate = record[key]
+    if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) {
+      return { url: candidate, ...durationFields(record) }
+    }
+  }
+  const video = record.video
+  if (typeof video === 'string') {
+    if (/^https?:\/\//i.test(video)) return { url: video, ...durationFields(record) }
+    const fromDataUri = dataUriPayload(video)
+    if (fromDataUri !== undefined) {
+      return { b64: fromDataUri.b64, ...(fromDataUri.contentType !== undefined ? { contentType: fromDataUri.contentType } : {}), ...durationFields(record) }
+    }
+    const raw = base64Payload(video)
+    if (raw !== undefined) return { b64: raw, ...durationFields(record) }
+  }
+  const videoRecord = recordOf(video)
+  if (videoRecord !== undefined) {
+    const nested = videoPayloadFromItem(videoRecord)
+    if (nested !== undefined) return { ...nested, ...durationFields(record) }
+  }
+  for (const key of ['b64_video', 'b64_json', 'b64', 'video_base64', 'base64']) {
+    const candidate = record[key]
+    if (typeof candidate !== 'string') continue
+    const raw = base64Payload(candidate, 16) ?? dataUriPayload(candidate)?.b64
+    if (raw !== undefined) {
+      const type =
+        typeof record.content_type === 'string'
+          ? record.content_type
+          : typeof record.mime_type === 'string'
+            ? record.mime_type
+            : undefined
+      return { b64: raw, ...(type !== undefined ? { contentType: type } : {}), ...durationFields(record) }
+    }
+  }
+  const data = record.data
+  if (typeof data === 'string') {
+    const fromDataUri = dataUriPayload(data)
+    if (fromDataUri !== undefined) {
+      return { b64: fromDataUri.b64, ...(fromDataUri.contentType !== undefined ? { contentType: fromDataUri.contentType } : {}), ...durationFields(record) }
+    }
+    const raw = base64Payload(data)
+    if (raw !== undefined) return { b64: raw, ...durationFields(record) }
+  }
+  return undefined
+}
+
+function durationFields(record: Record<string, unknown>): { durationSeconds?: number } {
+  for (const key of ['duration_seconds', 'duration', 'seconds']) {
+    const value = numberAt(record[key])
+    if (value !== undefined) return { durationSeconds: value }
+  }
+  return {}
+}
+
+/**
+ * Pull the first video from a buffered response. Cheaper Inference returns
+ * `{ videos: [{ url } | { b64_video }] }`; the older OpenAI-shaped arrays and a
+ * few gateway variants are accepted too.
+ */
+export function videoPayloadFrom(json: unknown): VideoPayload | undefined {
+  const record = recordOf(json)
+  if (record !== undefined) {
+    const direct = videoPayloadFromItem(record)
+    if (direct !== undefined) return direct
+    for (const key of ['videos', 'data', 'output', 'result', 'artifacts']) {
+      const value = record[key]
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const found = videoPayloadFromItem(entry)
+          if (found !== undefined) return found
+        }
+      } else if (value !== undefined) {
+        const found = videoPayloadFromItem(value)
+        if (found !== undefined) return found
+      }
+    }
+  }
+  return videoPayloadFromItem(json)
 }
 
 /** Submit a video job. */
@@ -207,16 +366,63 @@ export async function startVideo(options: {
   const protocol = videoProtocolFor(model)
   const body = requestBody(protocol, model, args, cwd)
   const endpoint = protocol === 'openai-videos' ? 'videos' : 'videos/generations'
+  const buffered = protocol === 'videos-generations'
   const response = await requestJson<unknown>({
     url: joinUrl(provider.baseUrl, endpoint),
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json', ...authHeaders(provider, key) },
     body: JSON.stringify(body),
-    timeoutMs: config.requestTimeoutMs,
+    // The buffered endpoint holds the request for the whole render, so it gets
+    // the video deadline and a response-size cap large enough for base64 MP4.
+    timeoutMs: buffered ? config.videoTimeoutMs : config.requestTimeoutMs,
+    ...(buffered ? { maxBytes: config.maxDownloadBytes } : {}),
     signal,
     what: `Provider "${provider.id}" ${endpoint}`
   })
   const id = jobIdFrom(response.json)
+  const requestId =
+    response.headers.get('x-ci-request-id') ??
+    response.headers.get('x-cheaper-inference-request-id') ??
+    (recordOf(response.json)?.request_id as string | undefined)
+  // Keep image bytes (and full data URIs) out of result metadata and sidecars.
+  const summary: Record<string, unknown> = { ...body }
+  delete summary.input_reference
+  delete summary.image
+  delete summary.image_url
+  if (typeof args.input_image === 'string' && args.input_image.trim() !== '') summary.input_image = args.input_image
+  const request = { endpoint, ...summary }
+
+  if (buffered) {
+    const payload = videoPayloadFrom(response.json)
+    if (payload !== undefined) {
+      return {
+        protocol,
+        ...(id !== undefined ? { id } : {}),
+        ...(requestId !== undefined ? { requestId } : {}),
+        ...(payload.url !== undefined ? { url: payload.url } : {}),
+        ...(payload.b64 !== undefined ? { b64: payload.b64 } : {}),
+        ...(payload.contentType !== undefined ? { contentType: payload.contentType } : {}),
+        request,
+        raw: response.json
+      }
+    }
+    // If a gateway answers the buffered path with a job object, fall back to
+    // polling the standard status path rather than failing on an empty array.
+    if (id !== undefined && !DONE_STATUSES.has(statusOf(response.json))) {
+      return {
+        protocol,
+        id,
+        ...(requestId !== undefined ? { requestId } : {}),
+        request,
+        raw: response.json
+      }
+    }
+    throw badResponse(
+      `Provider "${provider.id}" ${endpoint}`,
+      'the buffered response carried no videos[].url or videos[].b64_video'
+    )
+  }
+
   const url = videoUrlFrom(response.json)
   if (id === undefined && url === undefined) {
     throw badResponse(
@@ -224,16 +430,12 @@ export async function startVideo(options: {
       'the submission returned neither a job id nor a video URL'
     )
   }
-  // Keep image bytes (and full data URIs) out of result metadata and sidecars.
-  const summary: Record<string, unknown> = { ...body }
-  delete summary.input_reference
-  delete summary.image
-  if (typeof args.input_image === 'string' && args.input_image.trim() !== '') summary.input_image = args.input_image
   return {
     protocol,
     ...(id !== undefined ? { id } : {}),
+    ...(requestId !== undefined ? { requestId } : {}),
     ...(url !== undefined ? { url } : {}),
-    request: { endpoint, ...summary },
+    request,
     raw: response.json
   }
 }
@@ -242,7 +444,7 @@ export async function startVideo(options: {
 export async function pollVideo(options: {
   provider: ProviderConfig
   key: string
-  protocol: 'openai-videos' | 'async-videos'
+  protocol: VideoProtocol
   id: string
   config: ResolvedConfig
   signal?: AbortSignal
@@ -303,7 +505,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export async function waitForVideo(options: {
   provider: ProviderConfig
   key: string
-  protocol: 'openai-videos' | 'async-videos'
+  protocol: VideoProtocol
   id: string
   config: ResolvedConfig
   signal?: AbortSignal

@@ -48,13 +48,28 @@ function kindOf(record: unknown, id: string): ModelKind | null {
   if (typeof record === 'object' && record !== null) {
     const value = record as Record<string, unknown>
     const rawType = typeof value.type === 'string' ? value.type.toLowerCase() : ''
-    if (rawType === 'image' || rawType === 'video') return rawType
-    const modalities = value.modalities ?? value.capabilities ?? value.output_modalities
+    if (rawType.includes('video')) return 'video'
+    if (rawType === 'image' || rawType.includes('image_generation')) return 'image'
+    const capabilities = value.capabilities
+    if (typeof capabilities === 'object' && capabilities !== null && !Array.isArray(capabilities)) {
+      const caps = capabilities as Record<string, unknown>
+      if (caps.video === true) return 'video'
+      if (caps.image === true || caps.image_generation === true) return 'image'
+    }
+    const modalities = value.modalities ?? value.output_modalities
     if (Array.isArray(modalities)) {
       const set = new Set(modalities.map((entry) => String(entry).toLowerCase()))
       if (set.has('video')) return 'video'
       if (set.has('image')) return 'image'
     }
+    const endpoints = [
+      typeof value.endpoint === 'string' ? value.endpoint : '',
+      ...(Array.isArray(value.supported_endpoints)
+        ? value.supported_endpoints.map((entry) => (typeof entry === 'string' ? entry : ''))
+        : [])
+    ].join(' ')
+    if (/\/videos\b|videos\/generations/i.test(endpoints)) return 'video'
+    if (/\/images\b|images\/generations/i.test(endpoints)) return 'image'
     if (typeof value.capability === 'string') {
       const lower = value.capability.toLowerCase()
       if (lower.includes('video')) return 'video'

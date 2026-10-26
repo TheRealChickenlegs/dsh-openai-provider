@@ -19,7 +19,7 @@ import { resolveApiKey, redactDeep, redactSecrets } from './credentials.js'
 import { selectModel, selectProviderForKind, modelLabel } from './models.js'
 import { callImageApi, type ImageArgs } from './api/images.js'
 import { startVideo, waitForVideo, type VideoArgs } from './api/videos.js'
-import { downloadMedia, writeBase64Image, type MaterializedFile } from './api/media.js'
+import { downloadMedia, writeBase64Image, writeBase64Video, type MaterializedFile } from './api/media.js'
 import {
   IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
@@ -275,7 +275,7 @@ export async function runVideoGeneration(options: RunOptions, args: VideoArgs): 
     let mediaUrl = start.url
     let contentPath: string | undefined
     let last
-    if (start.url === undefined && start.id !== undefined) {
+    if (start.b64 === undefined && mediaUrl === undefined && start.id !== undefined) {
       const waited = await waitForVideo({
         provider,
         key: key.value,
@@ -289,10 +289,10 @@ export async function runVideoGeneration(options: RunOptions, args: VideoArgs): 
       contentPath = waited.contentPath
       last = waited.last
     }
-    if (mediaUrl === undefined && contentPath !== undefined) {
+    if (start.b64 === undefined && mediaUrl === undefined && contentPath !== undefined) {
       mediaUrl = joinUrl(provider.baseUrl, contentPath)
     }
-    if (mediaUrl === undefined) {
+    if (start.b64 === undefined && mediaUrl === undefined) {
       throw new Error('The provider finished without returning a downloadable video.')
     }
 
@@ -304,39 +304,48 @@ export async function runVideoGeneration(options: RunOptions, args: VideoArgs): 
       fileExtensions: VIDEO_EXTENSIONS,
       count: 1
     })
-    const file = await downloadMedia(
-      mediaUrl,
-      {
-        directory: target.directory,
-        stem: target.stem,
-        preferredExtension: '.mp4',
-        requestedExtension: target.exactFile ? target.requestedExtension : undefined,
-        timeoutMs: config.videoTimeoutMs,
-        maxBytes: config.maxDownloadBytes,
-        ...(exec?.signal ? { signal: exec.signal } : {}),
-        what: `Provider "${provider.id}" video download`,
-        // Content endpoints need the key; pre-signed CDN URLs are cross-origin and get no header.
-        authHeaders: authHeaders(provider, key.value),
-        authOrigin: originOf(provider.baseUrl)
-      },
-      'video'
-    )
+    const file =
+      start.b64 !== undefined
+        ? writeBase64Video(start.b64, {
+            directory: target.directory,
+            stem: target.stem,
+            preferredExtension: '.mp4',
+            requestedExtension: target.exactFile ? target.requestedExtension : undefined,
+            ...(start.contentType !== undefined ? { contentType: start.contentType } : {})
+          })
+        : await downloadMedia(
+            mediaUrl as string,
+            {
+              directory: target.directory,
+              stem: target.stem,
+              preferredExtension: '.mp4',
+              requestedExtension: target.exactFile ? target.requestedExtension : undefined,
+              timeoutMs: config.videoTimeoutMs,
+              maxBytes: config.maxDownloadBytes,
+              ...(exec?.signal ? { signal: exec.signal } : {}),
+              what: `Provider "${provider.id}" video download`,
+              // Content endpoints need the key; pre-signed CDN URLs are cross-origin and get no header.
+              authHeaders: authHeaders(provider, key.value),
+              authOrigin: originOf(provider.baseUrl)
+            },
+            'video'
+          )
     const duration = Date.now() - started
     const raw = (last?.raw ?? start.raw) as Record<string, unknown> | undefined
+    const rawVideo = Array.isArray(raw?.videos) ? (raw.videos[0] as Record<string, unknown> | undefined) : undefined
+    const rawSeconds = raw?.duration_seconds ?? rawVideo?.duration_seconds ?? raw?.seconds ?? raw?.duration
     const seconds =
-      typeof raw?.seconds === 'number'
-        ? raw.seconds
-        : typeof raw?.seconds === 'string' && Number.isFinite(Number(raw.seconds))
-          ? Number(raw.seconds)
-          : typeof raw?.duration === 'number'
-            ? raw.duration
-            : effective.seconds !== undefined && Number.isFinite(Number(effective.seconds))
-              ? Number(effective.seconds)
-              : null
+      typeof rawSeconds === 'number'
+        ? rawSeconds
+        : typeof rawSeconds === 'string' && Number.isFinite(Number(rawSeconds))
+          ? Number(rawSeconds)
+          : effective.seconds !== undefined && Number.isFinite(Number(effective.seconds))
+            ? Number(effective.seconds)
+            : null
     const size = parseDimensions(
       typeof raw?.size === 'string' ? raw.size : typeof effective.size === 'string' ? effective.size : undefined
     )
-    const jobId = start.id ?? 'immediate'
+    const jobId = start.id ?? start.requestId ?? (start.b64 !== undefined || start.url !== undefined ? 'buffered' : 'immediate')
     let metadataPath: string | undefined
     if (config.writeMetadata) {
       metadataPath = uniquePath(target.directory, `${target.stem}-metadata`, '.json')

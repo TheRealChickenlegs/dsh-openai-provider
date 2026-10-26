@@ -90,6 +90,36 @@ test('discoverProviderModels reads the common wrappers and sorts media first', a
   assert.equal(result.models.find((model) => model.id === 'gpt-4o').kind, null)
 })
 
+test('discoverProviderModels classifies media from type, capabilities and endpoints', async (t) => {
+  const server = await startServer(async (request, response) => {
+    if (request.url !== '/v1/models') {
+      response.statusCode = 404
+      response.end()
+      return
+    }
+    json(response, 200, {
+      data: [
+        { id: 'seedance-2.5', type: 'video', capabilities: { video: true, image_generation: false } },
+        { id: 'gpt-image-1', type: 'image', capabilities: { video: false, image_generation: true } },
+        { id: 'mystery-video', type: 'text', capabilities: { video: true } },
+        { id: 'endpoint-video', type: 'text', endpoint: '/v1/videos/generations', supported_endpoints: ['/v1/videos/generations'] }
+      ]
+    })
+  })
+  t.after(() => server.close())
+  const config = resolveConfig(providerConfig(server.url))
+  const result = await discoverProviderModels({
+    provider: config.providers[0],
+    key: KEY,
+    config
+  })
+  const byId = new Map(result.models.map((model) => [model.id, model]))
+  assert.equal(byId.get('seedance-2.5').kind, 'video')
+  assert.equal(byId.get('gpt-image-1').kind, 'image')
+  assert.equal(byId.get('mystery-video').kind, 'video')
+  assert.equal(byId.get('endpoint-video').kind, 'video')
+})
+
 test('discoverProviderModels accepts a bare array and nested models', async (t) => {
   let mode = 'array'
   const server = await startServer(async (request, response) => {

@@ -276,3 +276,95 @@ test('cross-origin video downloads do not carry the Authorization header', async
   assert.ok(fs.existsSync(result.path))
   assert.deepEqual(seen, [undefined])
 })
+
+test('videos-generations: buffered sync response with a video URL, no polling', async (t) => {
+  let submit = null
+  let statusPolls = 0
+  const server = await startServer(async (request, response, entry) => {
+    if (request.url === '/v1/videos/generations' && request.method === 'POST') {
+      submit = JSON.parse(entry.text || '{}')
+      json(response, 200, {
+        id: 'sync1',
+        status: 'completed',
+        duration_seconds: 5,
+        videos: [{ url: `${server.url}/cdn/sync.mp4`, duration_seconds: 5 }]
+      })
+      return
+    }
+    if (request.url === '/v1/videos/sync1') {
+      statusPolls += 1
+      json(response, 200, { status: 'completed' })
+      return
+    }
+    if (request.url === '/cdn/sync.mp4') {
+      binary(response, 200, MP4, 'video/mp4')
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  t.after(() => server.close())
+
+  const cwd = tempDir()
+  const image = path.join(cwd, 'first-frame.png')
+  fs.writeFileSync(image, PNG)
+  const config = providerConfig(server.url)
+  config.providers[0].models = [{ id: 'seedance-2.5', kind: 'video', protocol: 'videos-generations' }]
+  const tool = createVideoTool(config, makeHost())
+  const result = await runTool(
+    tool,
+    { prompt: 'ocean at dawn', model: 'seedance-2.5', seconds: '5', size: '1280x720', input_image: image },
+    cwd
+  )
+
+  assert.ok(fs.existsSync(result.path))
+  assert.match(result.path, /\.mp4$/)
+  assert.equal(statusPolls, 0, 'a buffered 200 response must not be polled')
+  assert.equal(submit.model, 'seedance-2.5')
+  assert.equal(submit.duration_seconds, 5)
+  assert.equal(submit.duration, undefined)
+  assert.equal(submit.resolution, '720p')
+  assert.equal(submit.aspect_ratio, '16:9')
+  assert.equal(submit.size, undefined)
+  assert.ok(submit.image_url.startsWith('data:image/png;base64,'))
+  assert.equal(result.duration_seconds, 5)
+  assert.equal(result.job_id, 'sync1')
+  const metadata = JSON.parse(fs.readFileSync(result.metadata_path, 'utf8'))
+  assert.equal(metadata.protocol, 'videos-generations')
+  assert.equal(JSON.stringify(metadata).includes('data:image/png;base64'), false)
+  assert.equal(result.text.includes(KEY), false)
+})
+
+test('videos-generations: buffered base64 MP4 is written without a download request', async (t) => {
+  let submit = null
+  let downloads = 0
+  const server = await startServer(async (request, response, entry) => {
+    if (request.url === '/v1/videos/generations' && request.method === 'POST') {
+      submit = JSON.parse(entry.text || '{}')
+      json(response, 200, {
+        id: 'sync2',
+        status: 'succeeded',
+        videos: [{ b64_video: MP4.toString('base64'), duration_seconds: '4' }]
+      })
+      return
+    }
+    downloads += 1
+    response.statusCode = 200
+    response.end()
+  })
+  t.after(() => server.close())
+
+  const config = providerConfig(server.url)
+  config.providers[0].models = [{ id: 'seedance-2.5', kind: 'video', protocol: 'videos-generations' }]
+  const tool = createVideoTool(config, makeHost())
+  const result = await runTool(tool, { prompt: 'base64 test', model: 'seedance-2.5' }, tempDir())
+
+  assert.ok(fs.existsSync(result.path))
+  assert.equal(downloads, 0, 'base64 media must not trigger a download')
+  assert.equal(submit.duration_seconds, 5, 'buffered requests default to a 5s duration')
+  assert.equal(result.duration_seconds, 4)
+  assert.equal(result.job_id, 'sync2')
+  const metadata = JSON.parse(fs.readFileSync(result.metadata_path, 'utf8'))
+  assert.equal(metadata.protocol, 'videos-generations')
+  assert.equal(JSON.stringify(metadata).includes(MP4.toString('base64')), false)
+})

@@ -149,7 +149,7 @@ export {
 } from './files.js'
 export { imageItemsFrom, callImageApi } from './api/images.js'
 export { pollVideo, startVideo, videoUrlFrom, waitForVideo } from './api/videos.js'
-export { downloadMedia, writeBase64Image, writeBuffer } from './api/media.js'
+export { downloadMedia, writeBase64Image, writeBase64Video, writeBuffer } from './api/media.js'
 export { runImageGeneration, runVideoGeneration } from './runner.js'
 export {
   IMAGE_DESCRIPTION,

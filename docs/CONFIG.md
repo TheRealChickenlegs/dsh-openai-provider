@@ -115,14 +115,39 @@ export the reference in the launching environment (for example `OPENAI_API_KEY`)
 | `id` | yes | — | Exact id sent to the provider |
 | `kind` | no | guessed from the name | `image` or `video` |
 | `label` | no | `id` | Display name |
-| `protocol` | video only | `openai-videos` for `sora` ids, otherwise `async-videos` | Video dialect |
+| `protocol` | video only | host-aware: `videos-generations` for `cheaperinference.com`, `openai-videos` for `sora` ids on `api.openai.com`, otherwise `async-videos` | Video dialect |
 | `editMode` | image only | `json` for `grok*` ids, otherwise `multipart` | Shape of `/images/edits` |
 | `size` | no | provider default | Default size, e.g. `1024x1024` |
 | `quality` | no | provider default | Default quality, e.g. `high` |
 | `seconds` | video only | provider default | Default clip duration |
-| `aspectRatio` | video only | provider default | Default aspect ratio for `async-videos` |
+| `aspectRatio` | video only | provider default | Default aspect ratio for `async-videos` and `videos-generations` |
 
 Per-model defaults are applied only when the tool call does not pass the corresponding argument.
+
+## Video dialects
+
+| Protocol value | Request | How the file arrives |
+| --- | --- | --- |
+| `openai-videos` | `POST /videos` | poll `GET /videos/{id}`, then `GET /videos/{id}/content` |
+| `async-videos` | `POST /videos/generations` | poll `GET /videos/{id}` until it returns a URL |
+| `videos-generations` | `POST /videos/generations` | the same response contains `videos[].url` or `videos[].b64_video` |
+
+Cheaper Inference uses the buffered `videos-generations` shape. Its request is held for the whole
+render, so the plugin applies `videoTimeoutMs` to that one request and does not poll. When no
+`seconds` argument or model default is present, a buffered request sends `duration_seconds: 5`; a
+`size` such as `1280x720` is translated to `resolution: "720p"` and `aspect_ratio: "16:9"`.
+
+```yaml
+- id: cheaper-inference
+  baseUrl: https://api.cheaperinference.com/v1
+  apiKeyEnv: CHEAPER_INFERENCE_API_KEY
+  models:
+    - id: seedance-2.5
+      kind: video
+      protocol: videos-generations
+      seconds: '5'
+      aspectRatio: '16:9'
+```
 
 ## Scalar settings
 

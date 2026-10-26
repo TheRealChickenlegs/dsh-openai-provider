@@ -122,14 +122,24 @@ Asynchronous submit → poll → download:
 
 Two dialects are supported per model:
 
-| Dialect            | Submit                     | Status                    | Media                                |
-| ------------------ | -------------------------- | ------------------------- | ------------------------------------ |
-| `openai-videos`    | `POST /videos`             | `GET /videos/{id}`        | `GET /videos/{id}/content`           |
-| `async-videos`     | `POST /videos/generations` | `GET /videos/{id}` → URL  | the returned URL (often a CDN)       |
+| Dialect              | Submit                     | Completion                          | Media                                  |
+| -------------------- | -------------------------- | ----------------------------------- | -------------------------------------- |
+| `openai-videos`      | `POST /videos`             | `GET /videos/{id}`                  | `GET /videos/{id}/content`             |
+| `async-videos`       | `POST /videos/generations` | `GET /videos/{id}` → URL            | the returned URL (often a CDN)         |
+| `videos-generations` | `POST /videos/generations` | buffered in the same response       | `videos[].url` or `videos[].b64_video` |
 
 OpenAI's hosted Sora 2 Videos API was [retired on 2026-09-24][sora-retired]; the `openai-videos`
-dialect is kept for compatible gateways that still implement that shape. Most current third-party
-providers use the `async-videos` shape, which is the default unless the model id contains `sora`.
+dialect is kept for compatible gateways that still implement that shape. Most third-party providers
+use the `async-videos` shape. **Cheaper Inference** uses `videos-generations`: the request waits for
+the render (up to the provider's limit) and returns a `videos` array, so there is no job to poll.
+The defaults are host-aware:
+
+- `*.cheaperinference.com` → `videos-generations`
+- `api.openai.com` with a `sora` model id → `openai-videos`
+- everything else → `async-videos`
+
+The model editor exposes the matching dialect; for Cheaper Inference it pins the buffered
+`sync /videos/generations` option so a model cannot accidentally be saved as pollable.
 
 [sora-retired]: https://developers.openai.com/api/docs/deprecations#2026-03-24-sora-2-video-generation-models-and-videos-api
 
@@ -201,7 +211,7 @@ src/
   discovery.ts      GET /models parsing
   models.ts         provider/model selection by capability
   api/images.ts     images/generations + edits (multipart and JSON)
-  api/videos.ts     openai-videos and async-videos dialects
+  api/videos.ts     openai-videos, async-videos and videos-generations dialects
   runner.ts         orchestration, file output, metadata, redaction
   tools.ts          tool contracts (JSON Schema subset)
   web-route.ts      authenticated model-discovery route

@@ -22,8 +22,11 @@ export type ImageProtocol = 'openai-images'
  * - `openai-videos`: `POST /videos`, `GET /videos/{id}`, `GET /videos/{id}/content`.
  * - `async-videos`:  `POST /videos/generations`, then `GET /videos/{id}` until a URL appears.
  *   This is the shape used by xAI Imagine and by many OpenAI-compatible gateways.
+ * - `videos-generations`: `POST /videos/generations` that buffers the job and returns a
+ *   `videos` array (`url` or `b64_video`) in the same response. This is the Cheaper
+ *   Inference shape; it can take minutes per request.
  */
-export type VideoProtocol = 'openai-videos' | 'async-videos'
+export type VideoProtocol = 'openai-videos' | 'async-videos' | 'videos-generations'
 
 /** One selected model inside a provider. */
 export interface ModelConfig {

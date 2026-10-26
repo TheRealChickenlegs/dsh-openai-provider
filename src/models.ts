@@ -84,9 +84,17 @@ export function editModeFor(model: ModelConfig): ImageEditMode {
 }
 
 /** Effective video protocol for a model. */
-export function videoProtocolFor(model: ModelConfig): 'openai-videos' | 'async-videos' {
-  if (model.protocol === 'openai-videos' || model.protocol === 'async-videos') return model.protocol
-  return /sora/i.test(model.id) ? 'openai-videos' : 'async-videos'
+export function videoProtocolFor(
+  model: ModelConfig
+): 'openai-videos' | 'async-videos' | 'videos-generations' {
+  if (
+    model.protocol === 'openai-videos' ||
+    model.protocol === 'async-videos' ||
+    model.protocol === 'videos-generations'
+  ) {
+    return model.protocol
+  }
+  return 'async-videos'
 }
 
 /** Human label for a model. */

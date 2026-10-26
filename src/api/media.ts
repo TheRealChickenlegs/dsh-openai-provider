@@ -81,6 +81,14 @@ export function writeBase64Image(
   return writeBuffer(decodeBase64Image(value), options, 'image')
 }
 
+/** Decode a base64 video payload and write it. */
+export function writeBase64Video(
+  value: string,
+  options: Omit<MaterializeOptions, 'timeoutMs' | 'maxBytes' | 'signal' | 'what'>
+): MaterializedFile {
+  return writeBuffer(decodeBase64Image(value), options, 'video')
+}
+
 /** Download a provider media URL and move it into place with the right extension. */
 export async function downloadMedia(
   url: string,

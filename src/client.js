@@ -133,7 +133,8 @@ window.__ModuleLoader__.load({
       '.op-listBox{display:flex;flex-direction:column;gap:8px;border:.5px solid var(--dsw-alias-border-l2,rgba(15,17,21,.14));border-radius:10px;padding:10px;background:var(--dsw-alias-bg-l2,rgba(15,17,21,.02))}',
       '.op-modelList{display:flex;flex-direction:column;gap:6px}',
       '.op-modelRow{display:grid;grid-template-columns:minmax(150px,1.6fr) 96px 130px auto;gap:6px;align-items:center}',
-      '.op-modelRow.discovered{grid-template-columns:minmax(150px,1fr) 96px auto}',
+      '.op-modelRow.discovered{grid-template-columns:24px minmax(150px,1fr) 96px;cursor:pointer}',
+      '.op-check{width:15px;height:15px;margin:0;accent-color:var(--dsw-alias-state-business-primary,#4d93f8);flex:none}',
       '.op-modelId{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.op-empty{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary,rgba(15,17,21,.6))}',
       '.op-msg{margin:0;font-size:12px;line-height:18px}',
@@ -326,6 +327,30 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /**
+     * Preserve each card's stable React key across a snapshot re-read. Without
+     * this, saving a provider changes its derived key and remounts the card,
+     * losing discovery results and checkbox selections.
+     */
+    function mergeProviderUids(previous, next) {
+      var byId = {}
+      var byIndex = {}
+      for (var i = 0; i < previous.length; i += 1) {
+        var old = previous[i]
+        if (!old || typeof old.__uid !== 'string') continue
+        if (typeof old.id === 'string' && old.id !== '') byId[old.id] = old.__uid
+        byIndex[i] = old.__uid
+      }
+      return next.map(function (provider, index) {
+        if (typeof provider.id === 'string' && provider.id !== '' && byId[provider.id] !== undefined) {
+          provider.__uid = byId[provider.id]
+        } else if (provider.id === '' && byIndex[index] !== undefined) {
+          provider.__uid = byIndex[index]
+        }
+        return provider
+      })
+    }
+
     /** Page-level guard: a component error must never abdicate the config slot. */
     class PageBoundary extends React.Component {
       constructor(props) {
@@ -429,6 +454,7 @@ window.__ModuleLoader__.load({
       var showAllState = React.useState(false)
       var manualIdState = React.useState('')
       var manualKindState = React.useState('image')
+      var selectionState = React.useState({})
 
       var keyInput = keyInputState[0]
       var setKeyInput = keyInputState[1]
@@ -448,6 +474,8 @@ window.__ModuleLoader__.load({
       var setManualId = manualIdState[1]
       var manualKind = manualKindState[0]
       var setManualKind = manualKindState[1]
+      var selection = selectionState[0]
+      var setSelection = selectionState[1]
 
       var ref = (provider.apiKeyEnv || '').trim() !== '' ? provider.apiKeyEnv.trim() : deriveRef(provider.id)
       var prefix = 'op-' + index
@@ -542,6 +570,7 @@ window.__ModuleLoader__.load({
 
       function loadModels() {
         setDiscovery({ loading: true, models: [], error: '' })
+        setSelection({})
         var saved
         try {
           saved = Promise.resolve(props.saveFirst())
@@ -570,17 +599,49 @@ window.__ModuleLoader__.load({
         })
       }
 
-      function expose(model) {
-        var kind = model.kind === 'video' ? 'video' : 'image'
-        var entry = { id: model.id, kind: kind }
-        if (kind === 'image') entry.editMode = defaultEditMode(model)
-        else entry.protocol = defaultProtocol({ id: model.id, kind: 'video' })
+      function toggleSelection(id) {
+        setSelection(function (previous) {
+          var next = Object.assign({}, previous)
+          if (next[id]) delete next[id]
+          else next[id] = true
+          return next
+        })
+      }
+
+      function toggleSelectAllShown() {
+        var selectable = visibleDiscovered
+        var all = selectable.length > 0 && selectable.every(function (model) { return selection[model.id] === true })
+        setSelection(function (previous) {
+          var next = Object.assign({}, previous)
+          if (all) {
+            selectable.forEach(function (model) { delete next[model.id] })
+          } else {
+            selectable.forEach(function (model) { next[model.id] = true })
+          }
+          return next
+        })
+      }
+
+      function addSelected() {
+        var chosen = discovered.filter(function (model) { return selection[model.id] === true && exposedIds[model.id] !== true })
+        if (chosen.length === 0) return
         update(function (current) {
           var models = asArray(current.models).slice()
-          if (models.some(function (existing) { return existing.id === model.id })) return current
-          models.push(entry)
+          var existing = {}
+          models.forEach(function (model) { existing[model.id] = true })
+          chosen.forEach(function (model) {
+            if (existing[model.id]) return
+            var kind = model.kind === 'video' ? 'video' : 'image'
+            var entry = { id: model.id, kind: kind }
+            if (kind === 'image') entry.editMode = defaultEditMode(entry)
+            else entry.protocol = defaultProtocol({ id: model.id, kind: 'video' })
+            models.push(entry)
+            existing[model.id] = true
+          })
           return Object.assign({}, current, { models: models })
         })
+        setSelection({})
+        props.notify('Added ' + chosen.length + ' model' + (chosen.length === 1 ? '' : 's') + '; save when you are done.')
       }
 
       function addManual() {
@@ -634,6 +695,12 @@ window.__ModuleLoader__.load({
       var hiddenByKind = discovered.filter(function (model) {
         return !exposedIds[model.id] && model.kind === null
       }).length
+      var selectedCount = discovered.filter(function (model) {
+        return selection[model.id] === true && exposedIds[model.id] !== true
+      }).length
+      var allShownSelected =
+        visibleDiscovered.length > 0 &&
+        visibleDiscovered.every(function (model) { return selection[model.id] === true })
 
       var modelRows = asArray(provider.models).map(function (model, modelIndex) {
         var kind = model.kind === 'video' ? 'video' : 'image'
@@ -648,6 +715,7 @@ window.__ModuleLoader__.load({
               value: model.id,
               disabled: disabled,
               'aria-label': 'Model id',
+              'data-exposed-model-id': model.id,
               onChange: function (event) { changeModel(modelIndex, { id: event.target.value }) }
             })
           ),
@@ -888,6 +956,34 @@ window.__ModuleLoader__.load({
                 ),
                 h('span', { className: 'op-count' }, visibleDiscovered.length + ' available')
               ),
+              h(
+                'div',
+                { className: 'op-filter' },
+                h(
+                  'label',
+                  { className: 'op-status' },
+                  h('input', {
+                    type: 'checkbox',
+                    className: 'op-check',
+                    checked: allShownSelected,
+                    disabled: disabled || visibleDiscovered.length === 0,
+                    'aria-label': 'Select all shown models',
+                    onChange: toggleSelectAllShown
+                  }),
+                  ' Select all shown'
+                ),
+                h(
+                  'button',
+                  {
+                    className: 'op-btn',
+                    type: 'button',
+                    disabled: disabled || selectedCount === 0,
+                    onClick: addSelected
+                  },
+                  'Add selected' + (selectedCount > 0 ? ' (' + selectedCount + ')' : '')
+                ),
+                h('span', { className: 'op-count' }, selectedCount + ' selected')
+              ),
               visibleDiscovered.length === 0
                 ? h('p', { className: 'op-empty' }, 'Nothing left to add here.')
                 : h(
@@ -895,20 +991,19 @@ window.__ModuleLoader__.load({
                     { className: 'op-modelList' },
                     visibleDiscovered.slice(0, 100).map(function (model) {
                       return h(
-                        'div',
+                        'label',
                         { className: 'op-modelRow discovered', key: 'd-' + model.id },
+                        h('input', {
+                          type: 'checkbox',
+                          className: 'op-check',
+                          checked: selection[model.id] === true,
+                          disabled: disabled,
+                          'aria-label': 'Select ' + model.id,
+                          'data-model-id': model.id,
+                          onChange: function () { toggleSelection(model.id) }
+                        }),
                         h('span', { className: 'op-modelId', title: model.id }, model.id),
-                        h('span', { className: 'op-count' }, model.kind || 'unknown'),
-                        h(
-                          'button',
-                          {
-                            className: 'op-btn',
-                            type: 'button',
-                            disabled: disabled,
-                            onClick: function () { expose(model) }
-                          },
-                          'Expose'
-                        )
+                        h('span', { className: 'op-count' }, model.kind || 'unknown')
                       )
                     })
                   ),
@@ -1049,7 +1144,7 @@ window.__ModuleLoader__.load({
       React.useEffect(function () {
         if (snapshot.status !== 'ready') return
         if (dirty) return
-        setProviders(readProviders(configValue))
+        setProviders(function (previous) { return mergeProviderUids(previous, readProviders(configValue)) })
         setEdits({})
       }, [snapshot, dirty])
 
@@ -1061,7 +1156,8 @@ window.__ModuleLoader__.load({
       function updateProvider(index, next) {
         setProviders(function (previous) {
           var copy = previous.slice()
-          copy[index] = next
+          var current = copy[index]
+          copy[index] = typeof next === 'function' ? next(current) : next
           return copy
         })
         setDirty(true)

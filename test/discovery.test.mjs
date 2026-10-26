@@ -87,7 +87,9 @@ test('discoverProviderModels reads the common wrappers and sorts media first', a
     ['flux-pro', 'gpt-image-1', 'sora-2', 'gpt-4o']
   )
   assert.equal(result.models.find((model) => model.id === 'sora-2').kind, 'video')
+  assert.equal(result.models.find((model) => model.id === 'sora-2').type, undefined)
   assert.equal(result.models.find((model) => model.id === 'gpt-4o').kind, null)
+  assert.equal(result.models.find((model) => model.id === 'gpt-4o').type, 'text')
 })
 
 test('discoverProviderModels classifies media from type, capabilities and endpoints', async (t) => {
@@ -115,7 +117,9 @@ test('discoverProviderModels classifies media from type, capabilities and endpoi
   })
   const byId = new Map(result.models.map((model) => [model.id, model]))
   assert.equal(byId.get('seedance-2.5').kind, 'video')
+  assert.equal(byId.get('seedance-2.5').type, 'video')
   assert.equal(byId.get('gpt-image-1').kind, 'image')
+  assert.equal(byId.get('gpt-image-1').type, 'image')
   assert.equal(byId.get('mystery-video').kind, 'video')
   assert.equal(byId.get('endpoint-video').kind, 'video')
 })

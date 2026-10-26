@@ -303,3 +303,73 @@ test('Cheaper Inference video models default to the buffered sync dialect', asyn
   assert.match(dom.window.document.getElementById('root').textContent, /buffered POST \/videos\/generations/)
   await React.act(async () => { root.unmount() })
 })
+
+test('discovered models can be filtered by image, video and all catalogue types', async () => {
+  const { dom, slot } = mountPage()
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        ok: true,
+        models: [
+          { id: 'flux-pro', kind: 'image', type: 'image' },
+          { id: 'sora-2', kind: 'video', type: 'video' },
+          { id: 'gpt-4o', kind: null, type: 'text' }
+        ]
+      })
+  })
+  const { createRoot } = await import('react-dom/client')
+  const root = createRoot(dom.window.document.getElementById('root'))
+  const props = slot.definition.inject()
+  const selectSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value').set
+  try {
+    await React.act(async () => {
+      root.render(React.createElement(slot.component, props))
+    })
+    await React.act(async () => {
+      findButton(dom, 'Add provider').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    setInput(dom, dom.window.document.getElementById('op-0-id'), 'catalogue')
+    setInput(dom, dom.window.document.getElementById('op-0-url'), 'https://example.com/v1')
+    await React.act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      findButton(dom, 'Load models').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    const typeFilter = dom.window.document.querySelector('select[aria-label="Filter discovered models by type"]')
+    const modelIds = () =>
+      [...dom.window.document.querySelectorAll('input[data-model-id]')].map((input) => input.dataset.modelId)
+    assert.equal(typeFilter.value, 'media')
+    assert.deepEqual(modelIds(), ['flux-pro', 'sora-2'])
+    assert.deepEqual(
+      [...typeFilter.options].map((option) => option.textContent),
+      ['All media (2)', 'Images (1)', 'Videos (1)', 'All types (3)']
+    )
+
+    await React.act(async () => {
+      selectSetter.call(typeFilter, 'image')
+      typeFilter.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    })
+    assert.deepEqual(modelIds(), ['flux-pro'])
+    await React.act(async () => {
+      selectSetter.call(typeFilter, 'video')
+      typeFilter.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    })
+    assert.deepEqual(modelIds(), ['sora-2'])
+    await React.act(async () => {
+      selectSetter.call(typeFilter, 'all')
+      typeFilter.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    })
+    assert.deepEqual(modelIds(), ['flux-pro', 'sora-2', 'gpt-4o'])
+    assert.match(dom.window.document.getElementById('root').textContent, /gpt-4o/)
+    assert.match(dom.window.document.getElementById('root').textContent, /text/)
+  } finally {
+    globalThis.fetch = originalFetch
+    await React.act(async () => { root.unmount() })
+  }
+})

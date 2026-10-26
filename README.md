@@ -67,9 +67,12 @@ The plugin page has three jobs: **providers**, **keys**, **model selection**.
    `DSH_OPENAI_<PROVIDER>_API_KEY`.
 3. **Save**, then **Load models** — the page asks the host to call the provider's `GET /models`
    using the stored key. Nothing secret crosses to the browser: the page sends only the provider id,
-   and the host looks up the already-configured endpoint and credential.
-4. **Expose** the models you want. Toggle their kind (`image`/`video`) and — only if the provider
-   deviates — their API dialect. Add a model id manually if the endpoint has no `/models`.
+   and the host looks up the already-configured endpoint and credential. Use the **type filter**
+   (All media / Images / Videos / All types) and the search box to narrow a large catalogue; each
+   row shows the catalogue's own type (`image`, `video`, `text`, `embedding`, …).
+4. Tick the models you want and click **Add selected** (or add an id manually if the endpoint has no
+   `/models`). Toggle their kind (`image`/`video`) and — only if the provider deviates — their API
+   dialect.
 5. **Save** again. The agent can now use those exact ids.
 
 Reusable keys: point a provider at an existing reference such as `OPENAI_API_KEY` or `XAI_API_KEY`
@@ -108,7 +111,7 @@ JSON data-URI edits are used for models configured as `edits: JSON` (the xAI Ima
 
 ### `openai_generate_video`
 
-Asynchronous submit → poll → download:
+The adapter follows each model's video dialect: buffered sync, async submit/poll, or OpenAI `/videos`:
 
 ```json
 {
@@ -120,7 +123,7 @@ Asynchronous submit → poll → download:
 }
 ```
 
-Two dialects are supported per model:
+Three dialects are supported per model:
 
 | Dialect              | Submit                     | Completion                          | Media                                  |
 | -------------------- | -------------------------- | ----------------------------------- | -------------------------------------- |
@@ -189,7 +192,7 @@ The full threat model and guarantees are in [docs/SECURITY.md](docs/SECURITY.md)
 npm install
 npm run build       # tsc + copies the browser bundle
 npm run typecheck
-npm test            # 88 tests: config, HTTP, images, videos, route, tools, settings DOM, security
+npm test            # 89 tests: config, HTTP, images, videos, route, tools, settings DOM, security
 ```
 
 `lib/` is build output but is **committed on purpose**, so the package can be installed from Git without a

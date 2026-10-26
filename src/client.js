@@ -133,7 +133,7 @@ window.__ModuleLoader__.load({
       '.op-listBox{display:flex;flex-direction:column;gap:8px;border:.5px solid var(--dsw-alias-border-l2,rgba(15,17,21,.14));border-radius:10px;padding:10px;background:var(--dsw-alias-bg-l2,rgba(15,17,21,.02))}',
       '.op-modelList{display:flex;flex-direction:column;gap:6px}',
       '.op-modelRow{display:grid;grid-template-columns:minmax(140px,1.5fr) 88px 208px auto;gap:6px;align-items:center}',
-      '.op-modelRow.discovered{grid-template-columns:24px minmax(150px,1fr) 96px;cursor:pointer}',
+      '.op-modelRow.discovered{grid-template-columns:24px minmax(150px,1fr) 112px;cursor:pointer}',
       '.op-check{width:15px;height:15px;margin:0;accent-color:var(--dsw-alias-state-business-primary,#4d93f8);flex:none}',
       '.op-modelId{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.op-empty{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary,rgba(15,17,21,.6))}',
@@ -143,6 +143,7 @@ window.__ModuleLoader__.load({
       '.op-state{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,rgba(15,17,21,.6))}',
       '.op-filter{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
       '.op-filter .op-input{max-width:260px}',
+      '.op-filter .op-select{max-width:190px}',
       '.op-details{border-top:.5px dashed var(--dsw-alias-border-l2,rgba(15,17,21,.16));padding-top:8px}',
       '.op-details summary{cursor:pointer;font-size:12px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-secondary,rgba(15,17,21,.8))}',
       '.op-detailsGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding-top:10px}',
@@ -473,7 +474,7 @@ window.__ModuleLoader__.load({
       var keyErrorState = React.useState('')
       var discoveryState = React.useState(null)
       var filterState = React.useState('')
-      var showAllState = React.useState(false)
+      var typeFilterState = React.useState('media')
       var manualIdState = React.useState('')
       var manualKindState = React.useState('image')
       var selectionState = React.useState({})
@@ -490,8 +491,8 @@ window.__ModuleLoader__.load({
       var setDiscovery = discoveryState[1]
       var filter = filterState[0]
       var setFilter = filterState[1]
-      var showAll = showAllState[0]
-      var setShowAll = showAllState[1]
+      var typeFilter = typeFilterState[0]
+      var setTypeFilter = typeFilterState[1]
       var manualId = manualIdState[0]
       var setManualId = manualIdState[1]
       var manualKind = manualKindState[0]
@@ -708,17 +709,25 @@ window.__ModuleLoader__.load({
       var exposedIds = {}
       asArray(provider.models).forEach(function (model) { exposedIds[model.id] = true })
       var discovered = discovery && Array.isArray(discovery.models) ? discovery.models : []
-      var visibleDiscovered = discovered.filter(function (model) {
-        if (exposedIds[model.id]) return false
-        if (!showAll && model.kind === null) return false
-        if (filter.trim() !== '' && model.id.toLowerCase().indexOf(filter.trim().toLowerCase()) === -1) return false
-        return true
+      var availableDiscovered = discovered.filter(function (model) { return exposedIds[model.id] !== true })
+      var imageCount = 0
+      var videoCount = 0
+      availableDiscovered.forEach(function (model) {
+        if (model.kind === 'image') imageCount += 1
+        else if (model.kind === 'video') videoCount += 1
       })
-      var hiddenByKind = discovered.filter(function (model) {
-        return !exposedIds[model.id] && model.kind === null
-      }).length
-      var selectedCount = discovered.filter(function (model) {
-        return selection[model.id] === true && exposedIds[model.id] !== true
+      var typeFiltered = availableDiscovered.filter(function (model) {
+        if (typeFilter === 'image') return model.kind === 'image'
+        if (typeFilter === 'video') return model.kind === 'video'
+        if (typeFilter === 'all') return true
+        return model.kind === 'image' || model.kind === 'video'
+      })
+      var visibleDiscovered = typeFiltered.filter(function (model) {
+        if (filter.trim() === '') return true
+        return model.id.toLowerCase().indexOf(filter.trim().toLowerCase()) !== -1
+      })
+      var selectedCount = availableDiscovered.filter(function (model) {
+        return selection[model.id] === true
       }).length
       var allShownSelected =
         visibleDiscovered.length > 0 &&
@@ -975,16 +984,21 @@ window.__ModuleLoader__.load({
                   onChange: function (event) { setFilter(event.target.value) }
                 }),
                 h(
-                  'label',
-                  { className: 'op-status' },
-                  h('input', {
-                    type: 'checkbox',
-                    checked: showAll,
-                    onChange: function (event) { setShowAll(event.target.checked) }
-                  }),
-                  ' Show non-media models' + (hiddenByKind > 0 ? ' (' + hiddenByKind + ')' : '')
+                  'select',
+                  {
+                    className: 'op-select',
+                    value: typeFilter,
+                    'aria-label': 'Filter discovered models by type',
+                    onChange: function (event) { setTypeFilter(event.target.value) }
+                  },
+                  [
+                    h('option', { key: 'media', value: 'media' }, 'All media (' + (imageCount + videoCount) + ')'),
+                    h('option', { key: 'image', value: 'image' }, 'Images (' + imageCount + ')'),
+                    h('option', { key: 'video', value: 'video' }, 'Videos (' + videoCount + ')'),
+                    h('option', { key: 'all', value: 'all' }, 'All types (' + availableDiscovered.length + ')')
+                  ]
                 ),
-                h('span', { className: 'op-count' }, visibleDiscovered.length + ' available')
+                h('span', { className: 'op-count' }, visibleDiscovered.length + ' shown')
               ),
               h(
                 'div',
@@ -1033,7 +1047,7 @@ window.__ModuleLoader__.load({
                           onChange: function () { toggleSelection(model.id) }
                         }),
                         h('span', { className: 'op-modelId', title: model.id }, model.id),
-                        h('span', { className: 'op-count' }, model.kind || 'unknown')
+                        h('span', { className: 'op-count' }, model.type || model.kind || 'other')
                       )
                     })
                   ),

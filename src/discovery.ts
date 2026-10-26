@@ -15,6 +15,8 @@ export interface DiscoveredModel {
   id: string
   /** Guessed capability, or null when the provider said nothing useful. */
   kind: ModelKind | null
+  /** The catalogue's own type when it supplied one (image, video, text, embedding, ...). */
+  type?: string
 }
 
 export interface DiscoveryResult {
@@ -44,6 +46,13 @@ function modelIdOf(record: unknown): string | undefined {
 }
 
 /** Read capability hints some providers attach to a model record. */
+function catalogueTypeOf(record: unknown): string | undefined {
+  if (typeof record !== 'object' || record === null || Array.isArray(record)) return undefined
+  const value = record as Record<string, unknown>
+  if (typeof value.type === 'string' && value.type.trim() !== '') return value.type.toLowerCase().slice(0, 32)
+  return undefined
+}
+
 function kindOf(record: unknown, id: string): ModelKind | null {
   if (typeof record === 'object' && record !== null) {
     const value = record as Record<string, unknown>
@@ -136,7 +145,9 @@ export async function discoverProviderModels(options: ModelsOptions): Promise<Di
       truncated = true
       break
     }
-    models.push({ id, kind: kindOf(record, id) })
+    const kind = kindOf(record, id)
+    const type = catalogueTypeOf(record)
+    models.push({ id, kind, ...(type !== undefined ? { type } : {}) })
   }
   // Media-looking models first; the settings page still lets the user reveal everything.
   models.sort((left, right) => {

@@ -368,3 +368,149 @@ test('videos-generations: buffered base64 MP4 is written without a download requ
   assert.equal(metadata.protocol, 'videos-generations')
   assert.equal(JSON.stringify(metadata).includes(MP4.toString('base64')), false)
 })
+
+test('videos-generations: a public image URL is passed through instead of a data URI', async (t) => {
+  let submit = null
+  const server = await startServer(async (request, response, entry) => {
+    if (request.url === '/v1/videos/generations' && request.method === 'POST') {
+      submit = JSON.parse(entry.text || '{}')
+      json(response, 200, {
+        id: 'public-url',
+        status: 'completed',
+        videos: [{ url: `${server.url}/cdn/public.mp4` }]
+      })
+      return
+    }
+    if (request.url === '/cdn/public.mp4') {
+      binary(response, 200, MP4, 'video/mp4')
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  t.after(() => server.close())
+
+  const config = providerConfig(server.url)
+  config.providers[0].models = [{ id: 'seedance-1.5-pro', kind: 'video', protocol: 'videos-generations' }]
+  const tool = createVideoTool(config, makeHost())
+  const imageUrl = 'https://images.example.invalid/keyframe.png'
+  const result = await runTool(
+    tool,
+    { prompt: 'public reference', model: 'seedance-1.5-pro', input_image: imageUrl, seconds: '5' },
+    tempDir()
+  )
+
+  assert.equal(submit.image_url, imageUrl)
+  assert.equal(JSON.stringify(submit).includes('data:image'), false)
+  assert.ok(fs.existsSync(result.path))
+})
+
+test('videos-generations: a local image on Cheaper Inference fails before the request with public-URL guidance', async (t) => {
+  const cwd = tempDir()
+  const image = path.join(cwd, 'frame.png')
+  fs.writeFileSync(image, PNG)
+  const config = providerConfig('https://api.cheaperinference.com', {
+    provider: {
+      id: 'cheaper-inference',
+      label: 'Cheaper Inference',
+      baseUrl: 'https://api.cheaperinference.com/v1',
+      apiKeyEnv: 'CHEAPER_INFERENCE_API_KEY',
+      models: [{ id: 'seedance-1.5-pro', kind: 'video', protocol: 'videos-generations' }]
+    }
+  })
+  const tool = createVideoTool(config, makeHost())
+  await assert.rejects(
+    () => runTool(tool, { prompt: 'local reference', model: 'seedance-1.5-pro', input_image: image }, cwd),
+    (error) => {
+      assert.match(error.message, /public https image URL/i)
+      assert.match(error.message, /uploads file id/i)
+      return true
+    }
+  )
+})
+
+test('videos-generations: a buffered response without media is not polled as an async job', async (t) => {
+  let statusHits = 0
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/v1/videos/generations' && request.method === 'POST') {
+      json(response, 200, { id: 'job-without-video', status: 'queued' })
+      return
+    }
+    if (request.url.startsWith('/v1/videos/')) {
+      statusHits += 1
+      json(response, 404, { error: { message: 'No such job' } })
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  t.after(() => server.close())
+
+  const config = providerConfig(server.url)
+  config.providers[0].models = [{ id: 'seedance-1.5-pro', kind: 'video', protocol: 'videos-generations' }]
+  const tool = createVideoTool(config, makeHost())
+  await assert.rejects(
+    () => runTool(tool, { prompt: 'missing media', model: 'seedance-1.5-pro' }, tempDir()),
+    /buffered response carried no videos/
+  )
+  assert.equal(statusHits, 0, 'the buffered endpoint must not be polled through /videos/{id}')
+})
+
+test('videos-generations: an absolute cross-origin media URL is downloaded exactly as returned', async (t) => {
+  const authSeen = []
+  const cdn = await startServer(async (request, response) => {
+    authSeen.push(request.headers.authorization)
+    if (request.url === '/media/out.mp4') {
+      binary(response, 200, MP4, 'video/mp4')
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  t.after(() => cdn.close())
+
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/v1/videos/generations' && request.method === 'POST') {
+      json(response, 200, {
+        id: 'cross-origin',
+        status: 'completed',
+        videos: [{ url: `${cdn.url}/media/out.mp4` }]
+      })
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  t.after(() => server.close())
+
+  const config = providerConfig(server.url)
+  config.providers[0].models = [{ id: 'seedance-1.5-pro', kind: 'video', protocol: 'videos-generations' }]
+  const tool = createVideoTool(config, makeHost())
+  const result = await runTool(tool, { prompt: 'cross origin', model: 'seedance-1.5-pro' }, tempDir())
+
+  assert.ok(fs.existsSync(result.path))
+  assert.equal(authSeen.length, 1)
+  assert.equal(authSeen[0], undefined, 'the key must not be sent to a returned cross-origin media host')
+})
+
+test('videos-generations: a relative media URL is resolved against the provider origin', async (t) => {
+  const server = await startServer(async (request, response) => {
+    if (request.url === '/v1/videos/generations' && request.method === 'POST') {
+      json(response, 200, { id: 'relative', status: 'completed', videos: [{ url: '/media/relative.mp4' }] })
+      return
+    }
+    if (request.url === '/media/relative.mp4') {
+      binary(response, 200, MP4, 'video/mp4')
+      return
+    }
+    response.statusCode = 404
+    response.end()
+  })
+  t.after(() => server.close())
+
+  const config = providerConfig(server.url)
+  config.providers[0].models = [{ id: 'seedance-1.5-pro', kind: 'video', protocol: 'videos-generations' }]
+  const tool = createVideoTool(config, makeHost())
+  const result = await runTool(tool, { prompt: 'relative url', model: 'seedance-1.5-pro' }, tempDir())
+  assert.ok(fs.existsSync(result.path))
+})

@@ -100,22 +100,22 @@ export function videoUrlFrom(json: unknown): string | undefined {
   if (record === undefined) return undefined
   const direct = [record.url, record.video_url, record.output_url, record.result_url, record.download_url]
   for (const candidate of direct) {
-    if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) return candidate
+    if (typeof candidate === 'string' && isUrlCandidate(candidate)) return candidate
   }
   const video = record.video
-  if (typeof video === 'string' && /^https?:\/\//i.test(video)) return video
+  if (typeof video === 'string' && isUrlCandidate(video)) return video
   const videoRecord = recordOf(video)
   if (videoRecord !== undefined) {
     for (const key of ['url', 'video_url', 'download_url']) {
       const candidate = videoRecord[key]
-      if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) return candidate
+      if (typeof candidate === 'string' && isUrlCandidate(candidate)) return candidate
     }
   }
   for (const key of ['data', 'output', 'result', 'videos', 'artifacts']) {
     const value = record[key]
     if (Array.isArray(value)) {
       for (const entry of value) {
-        if (typeof entry === 'string' && /^https?:\/\//i.test(entry)) return entry
+        if (typeof entry === 'string' && isUrlCandidate(entry)) return entry
         const found = videoUrlFrom(entry)
         if (found !== undefined) return found
       }
@@ -197,25 +197,103 @@ function aspectRatioFromSize(size: string | undefined): string | undefined {
   return `${width}:${height}`
 }
 
+function providerHost(provider: ProviderConfig): string {
+  try {
+    return new URL(provider.baseUrl).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function isBufferedCheaperProvider(provider: ProviderConfig): boolean {
+  return /(^|\.)cheaperinference\.com$/i.test(providerHost(provider))
+}
+
+function resolveMediaUrl(value: string, baseUrl: string): string {
+  try {
+    if (value.startsWith('/')) return new URL(value, new URL(baseUrl).origin).toString()
+    return new URL(value, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`).toString()
+  } catch {
+    return value
+  }
+}
+
+function publicImageUrl(value: string): string | undefined {
+  const trimmed = value.trim()
+  if (trimmed.length === 0 || trimmed.length > 4096) return undefined
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return undefined
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+  if (parsed.username !== '' || parsed.password !== '') return undefined
+  return trimmed
+}
+
+interface ResolvedVideoImage {
+  url?: string
+  dataUri?: string
+}
+
+/**
+ * Resolve a video reference image.
+ *
+ * A public http(s) URL is passed through untouched. Cheaper Inference's
+ * buffered video endpoint rejects data URIs and upload file ids (503), so a
+ * local path is a clear preflight error there instead of a wasted request.
+ * Other dialects keep the historical local-file -> data-URI behavior.
+ */
+function resolveVideoImage(
+  args: VideoArgs,
+  cwd: string,
+  protocol: VideoProtocol,
+  provider: ProviderConfig
+): ResolvedVideoImage | undefined {
+  if (typeof args.input_image !== 'string' || args.input_image.trim() === '') return undefined
+  const raw = args.input_image.trim()
+  const url = publicImageUrl(raw)
+  if (url !== undefined) return { url }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) || /^data:/i.test(raw)) {
+    throw new ProviderPluginError(
+      'INPUT_IMAGE_URL_INVALID',
+      '`input_image` must be a local file path or a public http(s) image URL.',
+      'Use an https URL that the provider can fetch; data URIs and upload file ids are not accepted by every provider.'
+    )
+  }
+  if (protocol === 'videos-generations' && isBufferedCheaperProvider(provider)) {
+    throw new ProviderPluginError(
+      'PUBLIC_IMAGE_REQUIRED',
+      'Cheaper Inference image-to-video requires a public https image URL.',
+      'Upload the keyframe to a public URL and pass that URL as input_image. ' +
+        'The /v1/uploads file id is documented for chat content and is not accepted by /videos/generations ' +
+        '(both image_url and input_references with a file id return 503). A local path or data URI is rejected.'
+    )
+  }
+  const reference = readInputImage(raw, cwd)
+  return { dataUri: toDataUri(reference.buffer, reference.mime) }
+}
+
 function requestBody(
   protocol: VideoProtocol,
   model: ModelConfig,
   args: VideoArgs,
-  cwd: string
+  cwd: string,
+  provider: ProviderConfig
 ): Record<string, unknown> {
   const extra = args.extra ?? {}
   if (typeof extra !== 'object' || Array.isArray(extra)) {
     throw new ProviderPluginError('BAD_EXTRA', '`extra` must be a JSON object.')
   }
   const body: Record<string, unknown> = { ...extra, model: model.id, prompt: args.prompt }
-  const reference =
-    typeof args.input_image === 'string' && args.input_image.trim() !== '' ? readInputImage(args.input_image, cwd) : undefined
-  const dataUri = reference !== undefined ? toDataUri(reference.buffer, reference.mime) : undefined
+  const image = resolveVideoImage(args, cwd, protocol, provider)
+  const imageValue = image?.url ?? image?.dataUri
 
   if (protocol === 'openai-videos') {
     if (args.seconds !== undefined) body.seconds = args.seconds
     if (args.size !== undefined) body.size = args.size
-    if (dataUri !== undefined) body.input_reference = { image_url: dataUri }
+    if (imageValue !== undefined) body.input_reference = { image_url: imageValue }
   } else if (protocol === 'videos-generations') {
     // Cheaper Inference requires one of duration_seconds/duration; default to 5s
     // when neither the caller nor the model supplied a duration.
@@ -226,7 +304,7 @@ function requestBody(
     if (resolution !== undefined) body.resolution = resolution
     const aspectRatio = args.aspect_ratio ?? aspectRatioFromSize(args.size)
     if (aspectRatio !== undefined) body.aspect_ratio = aspectRatio
-    if (dataUri !== undefined) body.image_url = dataUri
+    if (imageValue !== undefined) body.image_url = imageValue
   } else {
     if (args.seconds !== undefined) {
       const numeric = Number(args.seconds)
@@ -235,7 +313,7 @@ function requestBody(
     if (args.aspect_ratio !== undefined) body.aspect_ratio = args.aspect_ratio
     if (args.size !== undefined) body.size = args.size
     if (args.resolution !== undefined) body.resolution = args.resolution
-    if (dataUri !== undefined) body.image = { url: dataUri }
+    if (imageValue !== undefined) body.image = { url: imageValue }
   }
   if (args.seed !== undefined) body.seed = args.seed
   return body
@@ -254,6 +332,13 @@ function dataUriPayload(value: string): { b64: string; contentType?: string } | 
   return { b64: match[2].replace(/\s+/g, ''), contentType: match[1] }
 }
 
+function isUrlCandidate(value: string): boolean {
+  if (/^https?:\/\//i.test(value)) return true
+  if (value.length >= 2048 || /\s/.test(value)) return false
+  if (value.startsWith('/') && value.length > 1) return true
+  return /^[\w.-]+\/[\w./?=&%:-]+$/.test(value)
+}
+
 function base64Payload(value: string, minimumLength = 64): string | undefined {
   const compact = value.replace(/\s+/g, '')
   if (compact.length < minimumLength) return undefined
@@ -263,7 +348,7 @@ function base64Payload(value: string, minimumLength = 64): string | undefined {
 
 function videoPayloadFromItem(value: unknown): VideoPayload | undefined {
   if (typeof value === 'string') {
-    if (/^https?:\/\//i.test(value)) return { url: value }
+    if (isUrlCandidate(value)) return { url: value }
     const dataUri = dataUriPayload(value)
     if (dataUri !== undefined) return { b64: dataUri.b64, ...(dataUri.contentType !== undefined ? { contentType: dataUri.contentType } : {}) }
     const raw = base64Payload(value)
@@ -273,13 +358,13 @@ function videoPayloadFromItem(value: unknown): VideoPayload | undefined {
   if (record === undefined) return undefined
   for (const key of ['url', 'video_url', 'download_url', 'file_url']) {
     const candidate = record[key]
-    if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) {
+    if (typeof candidate === 'string' && isUrlCandidate(candidate)) {
       return { url: candidate, ...durationFields(record) }
     }
   }
   const video = record.video
   if (typeof video === 'string') {
-    if (/^https?:\/\//i.test(video)) return { url: video, ...durationFields(record) }
+    if (isUrlCandidate(video)) return { url: video, ...durationFields(record) }
     const fromDataUri = dataUriPayload(video)
     if (fromDataUri !== undefined) {
       return { b64: fromDataUri.b64, ...(fromDataUri.contentType !== undefined ? { contentType: fromDataUri.contentType } : {}), ...durationFields(record) }
@@ -364,7 +449,7 @@ export async function startVideo(options: {
 }): Promise<VideoStart> {
   const { provider, model, key, args, config, cwd, signal } = options
   const protocol = videoProtocolFor(model)
-  const body = requestBody(protocol, model, args, cwd)
+  const body = requestBody(protocol, model, args, cwd, provider)
   const endpoint = protocol === 'openai-videos' ? 'videos' : 'videos/generations'
   const buffered = protocol === 'videos-generations'
   const response = await requestJson<unknown>({
@@ -395,35 +480,29 @@ export async function startVideo(options: {
   if (buffered) {
     const payload = videoPayloadFrom(response.json)
     if (payload !== undefined) {
+      const mediaUrl = payload.url !== undefined ? resolveMediaUrl(payload.url, provider.baseUrl) : undefined
       return {
         protocol,
         ...(id !== undefined ? { id } : {}),
         ...(requestId !== undefined ? { requestId } : {}),
-        ...(payload.url !== undefined ? { url: payload.url } : {}),
+        ...(mediaUrl !== undefined ? { url: mediaUrl } : {}),
         ...(payload.b64 !== undefined ? { b64: payload.b64 } : {}),
         ...(payload.contentType !== undefined ? { contentType: payload.contentType } : {}),
         request,
         raw: response.json
       }
     }
-    // If a gateway answers the buffered path with a job object, fall back to
-    // polling the standard status path rather than failing on an empty array.
-    if (id !== undefined && !DONE_STATUSES.has(statusOf(response.json))) {
-      return {
-        protocol,
-        id,
-        ...(requestId !== undefined ? { requestId } : {}),
-        request,
-        raw: response.json
-      }
-    }
+    // Cheaper Inference's buffered endpoint has no /videos/{id} status route.
+    // Never fall back to polling here: that turns a malformed/short response
+    // into a misleading "No such job" download error.
     throw badResponse(
       `Provider "${provider.id}" ${endpoint}`,
       'the buffered response carried no videos[].url or videos[].b64_video'
     )
   }
 
-  const url = videoUrlFrom(response.json)
+  const rawUrl = videoUrlFrom(response.json)
+  const url = rawUrl !== undefined ? resolveMediaUrl(rawUrl, provider.baseUrl) : undefined
   if (id === undefined && url === undefined) {
     throw badResponse(
       `Provider "${provider.id}" ${endpoint}`,
@@ -522,7 +601,7 @@ export async function waitForVideo(options: {
     last = poll
     onProgress?.(poll)
     if (poll.status === 'done') {
-      if (poll.url !== undefined) return { url: poll.url, last }
+      if (poll.url !== undefined) return { url: resolveMediaUrl(poll.url, provider.baseUrl), last }
       if (protocol === 'openai-videos') {
         return { contentPath: `videos/${encodeURIComponent(id)}/content`, last }
       }

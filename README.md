@@ -144,6 +144,11 @@ The defaults are host-aware:
 The model editor exposes the matching dialect; for Cheaper Inference it pins the buffered
 `sync /videos/generations` option so a model cannot accidentally be saved as pollable.
 
+`input_image` accepts a local path or a public `https://` URL. Cheaper Inference's buffered
+image-to-video endpoint requires a **public URL**: it rejects data URIs and `/v1/uploads` file ids
+with HTTP 503. The plugin rejects a local path for that provider before spending a request and tells
+the caller to pass a public URL. Other dialects keep accepting local files (sent as a data URI).
+
 [sora-retired]: https://developers.openai.com/api/docs/deprecations#2026-03-24-sora-2-video-generation-models-and-videos-api
 
 ## Security model
@@ -192,7 +197,7 @@ The full threat model and guarantees are in [docs/SECURITY.md](docs/SECURITY.md)
 npm install
 npm run build       # tsc + copies the browser bundle
 npm run typecheck
-npm test            # 89 tests: config, HTTP, images, videos, route, tools, settings DOM, security
+npm test            # 94 tests: config, HTTP, images, videos, route, tools, settings DOM, security
 ```
 
 `lib/` is build output but is **committed on purpose**, so the package can be installed from Git without a

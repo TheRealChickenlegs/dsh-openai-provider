@@ -137,6 +137,11 @@ render, so the plugin applies `videoTimeoutMs` to that one request and does not 
 `seconds` argument or model default is present, a buffered request sends `duration_seconds: 5`; a
 `size` such as `1280x720` is translated to `resolution: "720p"` and `aspect_ratio: "16:9"`.
 
+For image-to-video on Cheaper Inference, `input_image` **must be a public http(s) URL**. The video
+endpoint rejects data URIs and `/v1/uploads` file ids with HTTP 503; the upload endpoint is for chat
+content. The plugin fails a local path for this provider before making the request and explains how
+to fix it. Other video dialects still accept a local path (sent as a data URI).
+
 ```yaml
 - id: cheaper-inference
   baseUrl: https://api.cheaperinference.com/v1

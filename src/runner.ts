@@ -323,7 +323,7 @@ export async function runVideoGeneration(options: RunOptions, args: VideoArgs): 
               timeoutMs: config.videoTimeoutMs,
               maxBytes: config.maxDownloadBytes,
               ...(exec?.signal ? { signal: exec.signal } : {}),
-              what: `Provider "${provider.id}" video download`,
+              what: `Provider "${provider.id}" video`,
               // Content endpoints need the key; pre-signed CDN URLs are cross-origin and get no header.
               authHeaders: authHeaders(provider, key.value),
               authOrigin: originOf(provider.baseUrl)

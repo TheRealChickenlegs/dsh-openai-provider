@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.6 — 2026-11-13
+
+### Changed
+
+- Shortened agent tool descriptions and parameter guidance to reduce prompt context while preserving essential usage and safety details.
+
 ## 0.1.5 — 2026-10-26
 
 ### Fixed
